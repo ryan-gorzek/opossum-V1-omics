@@ -8,6 +8,7 @@
 *.gtf
 *.bed
 *.fai
-*.
+*.csv
+*.tsv
 __pycache__/
 TOM/
