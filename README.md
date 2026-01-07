@@ -2,9 +2,9 @@
 # Comparative transcriptomics of opossum and mouse V1
 
 Code repository accompanying
-**Gorzek & Trachtenberg (2025).**
+**Gorzek & Trachtenberg (2025)**
 *Comparative transcriptomics reveals differences in cortical cell type organization between metatherian and eutherian mammals.*
-**bioRxiv.**: [https://doi.org/10.1101/2025.10.03.680397](https://doi.org/10.1101/2025.10.03.680397)
+**bioRxiv**: [https://doi.org/10.1101/2025.10.03.680397](https://doi.org/10.1101/2025.10.03.680397)
 
 This repository contains the analysis code used to generate all main and supplementary figures in the manuscript, spanning single-nucleus RNA-seq, spatial transcriptomics, and immunofluorescence data.
 
