@@ -1,0 +1,140 @@
+---
+title: "Figure 1F: Opossum-Mouse Integrated All-Cell Co-Clustering Heatmap (By Subclass)"
+output:
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(reshape2)
+library(viridisLite)
+library(ape)
+source("config.R")
+```
+
+```{r load_data}
+# Load processed objects for each class
+classes <- c("Glutamatergic", "GABAergic", "Nonneuronal")
+
+objs.mouse <- list()
+objs.opossum <- list()
+for (cl in classes) {
+  objs.mouse[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_", tolower(cl), "_processed.rds"))
+  objs.opossum[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_", tolower(cl), "_processed.rds"))
+}
+
+# Merge all classes
+obj.mouse <- merge(objs.mouse$Glutamatergic,
+                   y = c(objs.mouse$GABAergic, objs.mouse$Nonneuronal))
+obj.opossum <- merge(objs.opossum$Glutamatergic, 
+                     y = c(objs.opossum$GABAergic, objs.opossum$Nonneuronal))
+```
+
+```{r build_dendrograms}
+# Normalize and compute PCA for each object
+obj.mouse <- NormalizeAndPCA(obj.mouse, npcs = 100)
+obj.opossum <- NormalizeAndPCA(obj.opossum, npcs = 100)
+
+# Visualize elbow plots to assess dimensionality
+ElbowPlot(obj.mouse, ndims = 100)
+ElbowPlot(obj.opossum, ndims = 100)
+
+# Collapse IT subclasses for cleaner dendrogram visualization
+obj.mouse$subclass.plot <- obj.mouse$subclass
+obj.mouse$subclass.plot[obj.mouse$subclass %in% c("IT_A", "IT_B", "IT_C", "IT_D", "IT_E", 
+                                                   "L2/3", "L4", "L5IT", "L6IT")] <- "IT"
+
+obj.opossum$subclass.plot <- obj.opossum$subclass  
+obj.opossum$subclass.plot[obj.opossum$subclass %in% c("IT_A", "IT_B", "IT_C", "IT_D", "IT_E",
+                                                       "L2/3", "L4", "L5IT", "L6IT")] <- "IT"
+
+# Build cluster trees using the first 25 PCs
+Idents(obj.mouse) <- "subclass.plot"
+obj.mouse <- BuildClusterTree(obj.mouse, assay = "SCT", dims = 1:25)
+tree.mouse <- Tool(object = obj.mouse, slot = "BuildClusterTree")
+
+Idents(obj.opossum) <- "subclass.plot"
+obj.opossum <- BuildClusterTree(obj.opossum, assay = "SCT", dims = 1:25)
+tree.opossum <- Tool(object = obj.opossum, slot = "BuildClusterTree")
+```
+
+```{r save_dendrograms}
+# Plot and save dendrograms
+# These must be reordered (a bit tedious) and assembled with the heatmap in Illustrator
+## Mouse PNG
+png(paste0(dir.list$fig1$plots, "1F_Mouse-All-Subclass-Dendrogram.png"), 
+    width = 3, height = 5, units = "in", res = 300)
+plot.phylo(x = tree.mouse, show.node.label = FALSE, direction = "rightwards")
+dev.off()
+## Mouse SVG
+svg(paste0(dir.list$fig1$plots, "1F_Mouse-All-Subclass-Dendrogram.svg"),
+    width = 3, height = 5)
+plot.phylo(x = tree.mouse, show.node.label = FALSE, direction = "rightwards")
+dev.off()
+## Opossum PNG
+png(paste0(dir.list$fig1$plots, "1F_Opossum-All-Subclass-Dendrogram.png"), 
+    width = 3, height = 5, units = "in", res = 300)
+plot.phylo(x = tree.opossum, show.node.label = FALSE, direction = "rightwards")
+dev.off()
+## Opossum SVG
+svg(paste0(dir.list$fig1$plots, "1F_Opossum-All-Subclass-Dendrogram.svg"),
+    width = 3, height = 5)
+plot.phylo(x = tree.opossum, show.node.label = FALSE, direction = "rightwards")
+dev.off()
+```
+
+```{r integration}
+# Integrate the two species using SCTransform workflow
+obj.integrated <- IntegrateObjects(obj.mouse, obj.opossum, nfeatures = 3000, subsample = TRUE)
+
+# Collapse IT subclasses for consistency with dendrogram analysis
+obj.integrated$subclass.IT <- obj.integrated$subclass
+obj.integrated$subclass.IT[obj.integrated$subclass.IT %in% c("L2/3", "L4", "L5IT", "L6IT", 
+                                                              "IT_A", "IT_B", "IT_C", "IT_D")] <- "IT"
+```
+
+```{r heatmap_config}
+# Define subclass ordering for each species
+subclass.order.mouse <- c("IT", "L5PT", "L6CT", "L6b", "L5NP", 
+                          "Pvalb", "Sst", "Vip", "Stac", "Frem1", "Lamp5",
+                          "OD", "OPC", "Astro", "Micro", "Endo", "VLMC")
+
+subclass.order.opossum <- c("IT", "L5PT", "L6CT", "L6b", "L5NP", 
+                            "Pvalb", "Sst", "Vip", "Frem1", "Lamp5",
+                            "OD", "OPC", "Astro", "Micro", "Endo")
+
+# Create custom viridis color palette with white for low values
+custom_viridis <- function(n = 256) {
+  viridis_colors <- viridis(n, option = "D", direction = -1)
+  # Replace lowest values with white for better contrast at low overlap
+  viridis_colors <- c(rep("#FFFFFF", 8), viridis_colors[1:235])
+  return(colorRampPalette(viridis_colors)(n))
+}
+```
+
+```{r generate_heatmap}
+# Generate overlap heatmap
+p <- IntegratedClusterOverlapHeatmap(
+  obj.integrated, 
+  integvar.col = "species", 
+  ident.col = "subclass.IT", 
+  cluster.col = "integrated_snn_res.1", 
+  primary_order_row = subclass.order.mouse,
+  primary_order_col = subclass.order.opossum,
+  col.high = "black",  # Use black for high overlap instead of red
+  show_text = FALSE    # Cleaner visualization without percentage text
+) + scale_fill_gradientn(colors = custom_viridis())
+
+print(p)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1F_OpossumMouse-All-Subclass-Heatmap")
+```

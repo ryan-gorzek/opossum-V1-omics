@@ -1,0 +1,294 @@
+---
+title: "2b. Opossum, Label GABAergic"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(clustree)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load preprocessed GABAergic cells
+obj.opossum.gabaergic <- readRDS(paste0(dir.list$snrna$seurat$raw, "opossum_v1_gabaergic_raw.rds"))
+```
+
+```{r initial_clustering}
+# Initial clustering
+obj.opossum.gabaergic <- ClusterWithSCT(obj.opossum.gabaergic, 1)
+clust.plots <- PlotClusters(obj.opossum.gabaergic)
+# Save plots for Figure S1
+save.plots <- list("dimplot_cluster" = "S1L_Opossum-GABAergic-Cluster-DimPlot")
+for (sp in names(save.plots)) {
+  SavePNGandSVG(clust.plots[[sp]], dir.list$figS1$plots, save.plots[[sp]])
+}
+```
+
+```{r check_full_dataset}
+# Visualize full dataset clustering from previous step
+DimPlot(obj.opossum.gabaergic, reduction = "umap", group.by = "all_SCT_snn_res.1", label = TRUE, raster = FALSE, shuffle = TRUE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r canonical_markers}
+# Define canonical GABAergic markers
+canon.markers <- list(
+  class = c("Gad1", "Gad2", "Adarb2", "Lhx6", "Satb1"),
+  Pvalb = c("Pvalb", "Myo5b", "Cemip", "Etv1"), 
+  Sst = c("Sst", "Chodl", "Sox6", "Arx", "Sp9", "Mafb", "Npy", "Reln"), 
+  Vip = c("Vip"), 
+  Lamp5 = c("Lamp5"), 
+  Other = c("Frem1", "Stac", "Sncg", "Meis2")
+)
+
+# Visualize canonical markers
+DefaultAssay(obj.opossum.gabaergic) <- "RNA"
+Idents(obj.opossum.gabaergic) <- "SCT_snn_res.1"
+PlotFeatures(obj.opossum.gabaergic, canon.markers)
+DotPlot(obj.opossum.gabaergic, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+  theme(panel.background = element_rect(fill = "white", color = NA), 
+        plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r filter_clusters}
+# Filter low-quality clusters
+obj.opossum.gabaergic.prefilt <- obj.opossum.gabaergic
+obj.opossum.gabaergic <- subset(obj.opossum.gabaergic, idents = c(10, 11, 12, 14, 15, 17, 18), invert = TRUE)
+```
+
+```{r multi_resolution_clustering}
+# Cluster at multiple resolutions
+obj.opossum.gabaergic <- ClusterWithSCT(obj.opossum.gabaergic, c(1, 1.5, 2))
+
+# Visualize clusters at each resolution
+PlotClusters(obj.opossum.gabaergic, group.id = "SCT_snn_res.1")
+PlotClusters(obj.opossum.gabaergic, group.id = "SCT_snn_res.1.5")
+PlotClusters(obj.opossum.gabaergic, group.id = "SCT_snn_res.2")
+
+DefaultAssay(obj.opossum.gabaergic) <- "RNA"
+Idents(obj.opossum.gabaergic) <- "SCT_snn_res.1"
+PlotFeatures(obj.opossum.gabaergic, canon.markers)
+DotPlot(obj.opossum.gabaergic, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+  theme(panel.background = element_rect(fill = "white", color = NA), 
+        plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r clustree}
+# Visualize cluster relationships
+clustree(obj.opossum.gabaergic, prefix = "SCT_snn_res.")
+```
+
+```{r assign_subclasses}
+# Assign subclasses based on marker expression
+subclass.idx.opossum <- list()
+
+subclass.idx.opossum$SCT_snn_res.1$Pvalb <- c("2", "3", "5", "7", "11", "12")
+subclass.idx.opossum$SCT_snn_res.2$Pvalb <- c("1", "6", "7", "9", "10", "11", "12", "14")
+
+subclass.idx.opossum$SCT_snn_res.1$Sst <- c("4", "8", "10", "13")
+subclass.idx.opossum$SCT_snn_res.2$Sst <- c("2", "3", "8", "16")
+
+subclass.idx.opossum$SCT_snn_res.1$Vip <- c("1")
+subclass.idx.opossum$SCT_snn_res.2$Vip <- c("5", "15")
+
+subclass.idx.opossum$SCT_snn_res.1$Lamp5 <- c("6")
+subclass.idx.opossum$SCT_snn_res.2$Lamp5 <- c("13", "17")
+
+subclass.idx.opossum$SCT_snn_res.1$Frem1 <- c("9")
+subclass.idx.opossum$SCT_snn_res.2$Frem1 <- c("4")
+
+obj.opossum.gabaergic <- SubclassByIdent(obj.opossum.gabaergic, subclass.idx.opossum)
+```
+
+```{r compute_cluster_markers}
+# Compute differential expression markers
+subclass.labels <- c("Pvalb", "Sst", "Vip", "Lamp5")
+ident.labels <- c("SCT_snn_res.1", "SCT_snn_res.2")
+
+markers.opossum.gabaergic <- IdentMarkerDict(
+  obj.opossum.gabaergic, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$data, "opossum/gabaergic/markerdict_clusters.rds")
+)
+
+SaveDotPlots(
+  obj.opossum.gabaergic, 
+  markers.opossum.gabaergic,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/gabaergic/"),
+  "ENSMODG"
+)
+
+SaveFeaturePlots(
+  obj.opossum.gabaergic, 
+  markers.opossum.gabaergic,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/gabaergic/")
+)
+```
+
+```{r plot_gene_counts}
+# Plot differential gene counts
+for (sbcl in subclass.labels) {
+  for (id in ident.labels) {
+    p <- PlotIdentGeneCounts(markers.opossum.gabaergic, sbcl, id)
+    p <- p + theme(aspect.ratio = 1)
+    print(p)
+  }
+}
+```
+
+```{r train_test_confusion}
+# Generate confusion matrices using 50-50 train-test splits
+SaveIdentConfusionMatrices(
+  obj.opossum.gabaergic, 
+  subclass.labels, 
+  ident.labels, 
+  paste0(dir.list$pre$plots, "opossum/gabaergic/")
+)
+```
+
+```{r label_cells}
+# Assign final labels
+obj.opossum.gabaergic$subclass <- NA
+obj.opossum.gabaergic$type <- NA
+
+subclass.resolutions <- rev(list(
+  Pvalb = 1, 
+  Sst = 2, 
+  Vip = 2, 
+  Lamp5 = 2, 
+  Frem1 = 2
+))
+obj.opossum.gabaergic <- LabelCells(obj.opossum.gabaergic, subclass.resolutions)
+```
+
+```{r NA_subclass_type}
+# Check UMAP for cells with NA subclass or type
+# These could arise when partitioning with different clustering resolutions
+for (label in c("subclass", "type")) { 
+  if (any(is.na(obj.opossum.gabaergic@meta.data[[label]]))) {
+    # Assign labels for NA cells using nearest neighbors
+    label.nn <- paste0(label, ".nn")
+    obj.opossum.gabaergic <- LabelByNearestNeighbors(
+      obj.opossum.gabaergic,
+      ident = label,
+      output_col = label.nn,
+      reduction = "pca",
+      dims = 1:30,
+      fraction = 0.20,
+      n.neighbors = 50
+    )
+    # Check NN assignments
+    print(table(obj.opossum.gabaergic@meta.data[[label.nn]]))
+    # Transfer to final labels
+    na.cells <- is.na(obj.opossum.gabaergic@meta.data[[label]])
+    obj.opossum.gabaergic@meta.data[[label]][na.cells] <- obj.opossum.gabaergic@meta.data[[label.nn]][na.cells]
+    # Re-check for unassigned cells (called "None", NA are already labeled cells in new column)
+    print(any(obj.opossum.gabaergic@meta.data[[label]] == "None"))
+  }
+}
+```
+
+```{r visualize_labels}
+# Visualize final assignments
+DimPlot(obj.opossum.gabaergic, reduction = "umap", group.by = "subclass", label = TRUE, raster = FALSE) + 
+  NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.opossum.gabaergic, reduction = "umap", group.by = "type", label = TRUE, raster = FALSE) + 
+  NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r subclass_proportions}
+# Plot subclass proportions
+Idents(obj.opossum.gabaergic) <- "subclass"
+levels(obj.opossum.gabaergic) <- c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1")
+
+IdentBySample(obj.opossum.gabaergic, y_limits = c(0, 0.60))
+```
+
+```{r compute_type_markers}
+# Compute markers for final types
+subclass.labels <- c("Pvalb", "Sst", "Vip", "Lamp5")
+ident.labels <- c("type")
+
+subclass.markers.opossum.gabaergic <- SubclassMarkerDict(
+  obj.opossum.gabaergic, 
+  "subclass",
+  paste0(dir.list$pre$data, "opossum/gabaergic/markerdict_subclass.rds")
+)
+
+markers.opossum.gabaergic <- IdentMarkerDict(
+  obj.opossum.gabaergic, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$data, "opossum/gabaergic/markerdict_types.rds")
+)
+
+SaveDotPlots(
+  obj.opossum.gabaergic, 
+  markers.opossum.gabaergic,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/gabaergic/"),
+  "ENSMODG"
+)
+
+SaveFeaturePlots(
+  obj.opossum.gabaergic, 
+  markers.opossum.gabaergic,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/gabaergic/")
+)
+
+PlotSubclassGeneCounts(
+  subclass.markers.opossum.gabaergic, 
+  "subclass", 
+  c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")
+) + theme(aspect.ratio = 1)
+
+for (sbcl in subclass.labels) {
+  for (id in ident.labels) {
+    p <- PlotIdentGeneCounts(markers.opossum.gabaergic, sbcl, id)
+    p <- p + theme(aspect.ratio = 1)
+    print(p)
+  }
+}
+```
+
+```{r final_confusion_matrices}
+# Generate final confusion matrices
+SaveSubclassConfusionMatrices(
+  obj.opossum.gabaergic, 
+  "subclass",
+  c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac"),
+  paste0(dir.list$pre$plots, "opossum/gabaergic/")
+)
+
+SaveIdentConfusionMatrices(
+  obj.opossum.gabaergic, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/gabaergic/")
+)
+```
+
+```{r save_object}
+# Save processed object
+saveRDS(obj.opossum.gabaergic, paste0(dir.list$snrna$seurat$processed, "opossum_v1_gabaergic_processed.rds"))
+```

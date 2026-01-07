@@ -1,0 +1,69 @@
+---
+title: "Figure 1E: All-Subclass DotPlot with Collapsed 'IT' Subclass"
+output: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load processed objects for each class
+classes <- c("Glutamatergic", "GABAergic", "Nonneuronal")
+
+objs.mouse <- list()
+objs.opossum <- list()
+for (cl in classes) {
+  objs.mouse[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_", tolower(cl), "_processed.rds"))
+  objs.opossum[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_", tolower(cl), "_processed.rds"))
+}
+
+# Merge all classes
+obj.mouse <- merge(objs.mouse$Glutamatergic,
+                   y = c(objs.mouse$GABAergic, objs.mouse$Nonneuronal))
+obj.opossum <- merge(objs.opossum$Glutamatergic, 
+                     y = c(objs.opossum$GABAergic, objs.opossum$Nonneuronal))
+```
+
+```{r prepare_combined}
+# Combine objects
+obj.combined <- merge(obj.mouse, y = obj.opossum)
+
+# Collapse IT subtypes
+obj.combined$subclass.plot <- obj.combined$subclass
+obj.combined$subclass.plot[obj.combined$subclass %in% c("IT_A", "IT_B", "IT_C", "IT_D", 
+                                                        "L2/3", "L4", "L5IT", "L6IT")] <- "IT"
+
+# Set identity and levels
+Idents(obj.combined) <- "subclass.plot"
+levels(obj.combined) <- rev(c("IT", "L5NP", "L5PT", "L6CT", "L6b",
+                              "Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac", 
+                              "Astro", "Micro", "OD", "OPC", "Endo", "VLMC"))
+```
+
+```{r fig_1E, fig.width=8, fig.height=8}
+# Define canonical marker genes
+markers <- c("Syt14", "Satb2", "Nxph3", "Fezf2", "Foxp2", "Drd1", 
+             "Gad1", "Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac", 
+             "Aldh1l1", "Csf1r", "Mog", "Pdgfra", "Flt1", "Slc47a1")
+
+p <- DotPlot(obj.combined, assay = "RNA", features = markers,
+             cols = c("#aaaaaa", "#c692b8"), split.by = "species", 
+             scale = TRUE, scale.by = "radius", scale.max = 50, col.max = 2) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.4))
+
+print(p)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1E_OpossumMouse-All-Subclass-DotPlot")
+```

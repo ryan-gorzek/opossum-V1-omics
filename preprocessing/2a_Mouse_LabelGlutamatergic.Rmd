@@ -1,0 +1,136 @@
+---
+title: "2a. Mouse, Label Glutamatergic"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratDisk)
+library(reticulate)
+library(scrubletR)
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(data.table)
+library(clustree)
+library(reshape2)
+library(tidyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load preprocessed glutamatergic cells
+obj.mouse.glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$raw, "mouse_v1_glutamatergic_raw.rds"))
+```
+
+```{r initial_clustering}
+# Cluster at multiple resolutions
+obj.mouse.glutamatergic <- ClusterWithSCT(obj.mouse.glutamatergic, c(1, 1.5, 2))
+```
+
+```{r explore_clustering}
+# Examine clustering and metadata
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "sample", label = FALSE, raster = FALSE, shuffle = TRUE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "subclass", label = TRUE, raster = FALSE, shuffle = TRUE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "type", label = TRUE, raster = FALSE, shuffle = TRUE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "SCT_snn_res.1", label = TRUE, raster = FALSE, shuffle = TRUE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "SCT_snn_res.1.5", label = TRUE, raster = FALSE, shuffle = TRUE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse.glutamatergic, reduction = "umap", group.by = "SCT_snn_res.2", label = TRUE, raster = FALSE, shuffle = TRUE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r canonical_markers}
+# Define and visualize canonical marker genes
+canon.markers <- list(
+                    class = c("Slc17a6", "Slc17a7", "Sv2b"),
+                    L23 = c("Cux2", "Ccbe1", "Mdga1", "Stard8"),
+                    L4 = c("Whrn", "Rorb"),
+                    L5IT = c("Deptor", "Foxo1", "Ptprm"),
+                    L5NP = c("Nxph1", "Tshz2", "Trhr", "Slc17a8"),
+                    L5PT = c("Bcl6", "Erg", "Reln"),
+                    L6CT = c("Foxp2", "Syt6"),
+                    L6IT = c("Zfp804b", "Cdh9"),
+                    L6b = c("Ctgf", "Inpp4b", "Svil")
+                      )
+
+DefaultAssay(obj.mouse.glutamatergic) <- "RNA"
+Idents(obj.mouse.glutamatergic) <- "type"
+PlotFeatures(obj.mouse.glutamatergic, canon.markers)
+DotPlot(obj.mouse.glutamatergic, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+                         theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+                         theme(panel.background = element_rect(fill = "white", color = NA), plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r clustree}
+# Visualize clustering tree across resolutions
+clustree(obj.mouse.glutamatergic, prefix = "SCT_snn_res.")
+```
+
+```{r assign_subclasses}
+# Map existing types to subclasses
+subclass.idx.mouse <- list()
+
+subclass.idx.mouse$type$`L2/3` <- c("L2/3_A", "L2/3_B", "L2/3_C")
+subclass.idx.mouse$type$L4 <- c("L4_A", "L4_B", "L4_C")
+subclass.idx.mouse$type$L5IT <- c("L5IT")
+subclass.idx.mouse$type$L5NP <- c("L5NP")
+subclass.idx.mouse$type$L5PT <- c("L5PT_A", "L5PT_B")
+subclass.idx.mouse$type$L6CT <- c("L6CT_A", "L6CT_B", "L6CT_C")
+subclass.idx.mouse$type$L6IT <- c("L6IT_A", "L6IT_B")
+subclass.idx.mouse$type$L6b <- c("L6b")
+
+obj.mouse.glutamatergic <- SubclassByIdent(obj.mouse.glutamatergic, subclass.idx.mouse)
+```
+
+```{r plot_proportions}
+# Visualize relative subclass proportions across samples
+Idents(obj.mouse.glutamatergic) <- "subclass"
+levels(obj.mouse.glutamatergic) <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6CT", "L6IT", "L6b")
+
+IdentBySample(obj.mouse.glutamatergic)
+```
+
+```{r type_markers_final}
+# Compute markers for final type assignments
+subclass.labels <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6CT", "L6IT", "L6b")
+ident.labels <- c("type")
+
+subclass.markers.mouse.glutamatergic <- SubclassMarkerDict(obj.mouse.glutamatergic, "subclass",
+                                                       paste0(dir.list$pre$data, "mouse/glutamatergic/markerdict_subclass.rds"))
+markers.mouse.glutamatergic <- IdentMarkerDict(obj.mouse.glutamatergic, subclass.labels, ident.labels,
+                                        paste0(dir.list$pre$data, "mouse/glutamatergic/markerdict_types.rds"))
+SaveDotPlots(obj.mouse.glutamatergic, markers.mouse.glutamatergic,
+             subclass.labels, ident.labels,
+             paste0(dir.list$pre$plots, "mouse/glutamatergic/"), "ENSMUSG")
+SaveFeaturePlots(obj.mouse.glutamatergic, markers.mouse.glutamatergic,
+                 subclass.labels, ident.labels,
+                 paste0(dir.list$pre$plots, "mouse/glutamatergic/"))
+
+PlotSubclassGeneCounts(subclass.markers.mouse.glutamatergic, "subclass", 
+                       c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6CT", "L6IT", "L6b")) + theme(aspect.ratio = 1)
+for (sbcl in subclass.labels) {
+  for (id in ident.labels) {
+    p <- PlotIdentGeneCounts(markers.mouse.glutamatergic, sbcl, id)
+    p <- p + theme(aspect.ratio = 1)
+    print(p)
+  }
+}
+
+SaveSubclassConfusionMatrices(obj.mouse.glutamatergic, "subclass",
+                              c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6CT", "L6IT", "L6b"),
+                              paste0(dir.list$pre$plots, "mouse/glutamatergic/"))
+SaveIdentConfusionMatrices(obj.mouse.glutamatergic, subclass.labels, ident.labels,
+                           paste0(dir.list$pre$plots, "mouse/glutamatergic/"))
+```
+
+```{r save_processed}
+# Save processed object with final labels
+saveRDS(obj.mouse.glutamatergic, paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+```

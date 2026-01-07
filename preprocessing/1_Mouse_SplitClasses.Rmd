@@ -1,0 +1,140 @@
+---
+title: "1. Mouse, Split Classes"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratDisk)
+library(reticulate)
+library(scrubletR)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(tidyverse)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Define path to 10x output data and sample identifiers
+data_path <- paste0(dir.list$central, "samples/MouseV1")
+sample_IDs <- c('P38_1a', 'P38_2a', 'P38_2b')
+dtypes <- c("Glut", "GABA", "Non")
+classes <- c("glutamatergic", "gabaergic", "nonneuronal")
+
+# Load data for each class and sample
+dtype.objs <- c()
+for (dtype in dtypes) {
+  sample.objs <- c()
+  for (sample in sample_IDs) {
+    temp.obj.path <- paste0(data_path, "-", dtype, "/", sample, "/")
+    temp.obj.data <- Read10X(temp.obj.path, gene.column = 1)
+    temp.obj <- CreateSeuratObject(counts = temp.obj.data, project = "Mouse_V1")
+    temp.obj$species <- "Mouse"
+    temp.obj$sample <- sample
+    temp.obj$class <- classes[dtypes == dtype]
+    subclass <- read.csv(paste0(temp.obj.path, "subclass.csv"), header = FALSE)
+    rownames(subclass) <- colnames(temp.obj)
+    temp.obj <- AddMetaData(temp.obj, subclass, "subclass")
+    type <- read.csv(paste0(temp.obj.path, "type.csv"), header = FALSE)
+    rownames(type) <- colnames(temp.obj)
+    temp.obj <- AddMetaData(temp.obj, type, "type")
+    temp.obj <- scrublet_R(seurat_obj = temp.obj)
+    sample.objs <- append(sample.objs, temp.obj)
+  }
+  dtype.objs <- append(dtype.objs, sample.objs[1:length(sample.objs)])
+}
+
+# Merge all samples into single object
+obj.mouse <- merge(dtype.objs[[1]], y = dtype.objs[2:9], 
+                   add.cell.ids = c(sample_IDs, sample_IDs, sample_IDs), 
+                   project = "Mouse_V1")
+```
+
+```{r qc_plots}
+# Quality control plots
+VlnPlot(obj.mouse, features = c("nFeature_RNA"), group.by = "sample", raster = FALSE)
+VlnPlot(obj.mouse, features = c("nCount_RNA"), group.by = "sample", raster = FALSE)
+FeatureScatter(obj.mouse, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", raster = FALSE)
+```
+
+```{r initial_clustering}
+# Initial clustering
+obj.mouse <- ClusterWithSCT(obj.mouse, 1)
+```
+
+```{r diagnostic_plots}
+# Diagnostic plots
+DimPlot(obj.mouse, reduction = "umap", label = TRUE, raster = FALSE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse, reduction = "umap", group.by = "sample", raster = FALSE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+FeaturePlot(obj.mouse, "nFeature_RNA", raster = FALSE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+FeaturePlot(obj.mouse, "nCount_RNA", raster = FALSE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse, reduction = "umap", group.by = "predicted_doublets", raster = FALSE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r examine_labels}
+# Examine subclass and type labels from previous publication
+DimPlot(obj.mouse, reduction = "umap", group.by = "subclass", label = TRUE, raster = FALSE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.mouse, reduction = "umap", group.by = "type", label = TRUE, raster = FALSE) + NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r canonical_markers, fig.width=12, fig.height=6}
+# Examine canonical subclass marker gene expression
+canon.markers <- list(
+                    class = c("Snap25", "Sv2b", "Gad1", "Gad2"),
+                    L23 = c("Cux2", "Ccbe1", "Mdga1", "Stard8"),
+                    L4 = c("Whrn", "Rorb"),
+                    L5IT = c("Bcl11b"),
+                    L5NP = c("Nxph1", "Tshz2", "Trhr", "Slc17a8"),
+                    L5PT = c("Bcl6", "Erg", "Reln"),
+                    L6CT = c("Foxp2", "Syt6"),
+                    L6IT = c("Zfp804b", "Cdh9"),
+                    L6b = c("Ctgf", "Inpp4b", "Svil"),
+                    Pvalb = c("Pvalb", "Myo5b"), 
+                    Sst = c("Sst", "Chodl"),
+                    Vip = c("Vip"),
+                    Lamp5 = c("Lamp5", "Sv2c"),
+                    Other = c("Frem1", "Stac", "Sncg", "Meis2"),
+                    Astro = c("Aldh1l1", "Grin2c", "Phkg1"),
+                    Endo = c("Pecam1", "Mecom", "Flt1"),
+                    Micro = c("Cx3cr1", "Arhgap45", "Inpp5d"),
+                    OD = c("Enpp6", "Mog", "St18"),
+                    OPC = c("Pdgfra", "Cacng4"),
+                    VLMC = c("Slc6a13", "Slc47a1", "Bnc2")
+                      )
+DefaultAssay(obj.mouse) <- "RNA"
+DotPlot(obj.mouse, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+                         theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+                         theme(panel.background = element_rect(fill = "white", color = NA), plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r plot_classes}
+# Plot classes in all-cell UMAP
+p <- DimPlot(obj.mouse, reduction = "umap", group.by = "class", label = FALSE, raster = FALSE, shuffle = TRUE) + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+print(p)
+```
+
+```{r save_split_classes}
+# Save the original clustering result for future reference
+obj.mouse$all_SCT_snn_res.1 <- obj.mouse$SCT_snn_res.1
+
+# Save classes into separate objects for downstream processing
+Idents(obj.mouse) <- "class"
+# Glutamatergic
+obj.mouse.glutamatergic <- subset(obj.mouse, idents = "glutamatergic")
+saveRDS(obj.mouse.glutamatergic, paste0(dir.list$snrna$seurat$raw, "mouse_v1_glutamatergic_raw.rds"))
+# GABAergic
+obj.mouse.gabaergic <- subset(obj.mouse, idents = "gabaergic")
+saveRDS(obj.mouse.gabaergic, paste0(dir.list$snrna$seurat$raw, "mouse_v1_gabaergic_raw.rds"))
+# Non-neuronal
+obj.mouse.nonneuronal <- subset(obj.mouse, idents = "nonneuronal")
+saveRDS(obj.mouse.nonneuronal, paste0(dir.list$snrna$seurat$raw, "mouse_v1_nonneuronal_raw.rds"))
+```

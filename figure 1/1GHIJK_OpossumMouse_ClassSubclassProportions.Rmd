@@ -1,0 +1,244 @@
+---
+title: "Figure 1G-K: Class and Subclass Proportions"
+output: 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load processed objects for each class
+classes <- c("Glutamatergic", "GABAergic", "Nonneuronal")
+
+objs.mouse <- list()
+objs.opossum <- list()
+for (cl in classes) {
+  objs.mouse[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_", tolower(cl), "_processed.rds"))
+  objs.opossum[[cl]] <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_", tolower(cl), "_processed.rds"))
+}
+
+# Merge all classes
+obj.mouse <- merge(objs.mouse$Glutamatergic, 
+                   y = c(objs.mouse$GABAergic, objs.mouse$Nonneuronal))
+obj.opossum <- merge(objs.opossum$Glutamatergic, 
+                     y = c(objs.opossum$GABAergic, objs.opossum$Nonneuronal))
+```
+
+```{r compute_proportions}
+# Collapse IT subtypes
+obj.opossum$subclass.plot <- obj.opossum$subclass
+obj.opossum$subclass.plot[obj.opossum$subclass %in% c("IT_A", "IT_B", "IT_C", "IT_D", "IT_E", 
+                                                        "L2/3", "L4", "L5IT", "L6IT")] <- "IT"
+
+obj.mouse$subclass.plot <- obj.mouse$subclass
+obj.mouse$subclass.plot[obj.mouse$subclass %in% c("IT_A", "IT_B", "IT_C", "IT_D", "IT_E", 
+                                                    "L2/3", "L4", "L5IT", "L6IT")] <- "IT"
+
+# Count cells per sample per subclass
+opossum.counts <- as.data.frame.matrix(table(obj.opossum$sample, obj.opossum$subclass.plot))
+opossum.counts$Stac <- 0
+opossum.counts$VLMC <- 0
+opossum.counts$species <- "Opossum"
+opossum.counts$Glutamatergic <- rowSums(opossum.counts[, c("IT", "L5NP", "L5PT", "L6CT", "L6b")])
+opossum.counts$GABAergic <- rowSums(opossum.counts[, c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")])
+opossum.counts$Nonneuronal <- rowSums(opossum.counts[, c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC")])
+
+mouse.counts <- as.data.frame.matrix(table(obj.mouse$sample, obj.mouse$subclass.plot))
+mouse.counts$species <- "Mouse"
+mouse.counts$Glutamatergic <- rowSums(mouse.counts[, c("IT", "L5NP", "L5PT", "L6CT", "L6b")])
+mouse.counts$GABAergic <- rowSums(mouse.counts[, c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")])
+mouse.counts$Nonneuronal <- rowSums(mouse.counts[, c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC")])
+
+all.counts <- rbind(opossum.counts, mouse.counts)
+
+# Calculate proportions
+all.props <- all.counts %>%
+  mutate(MGE = (Pvalb + Sst) / GABAergic,
+         CGE = (Vip + Frem1 + Stac + Lamp5) / GABAergic,
+         IT = IT / Glutamatergic,
+         L5NP = L5NP / Glutamatergic,
+         L5PT = L5PT / Glutamatergic,
+         L6CT = L6CT / Glutamatergic,
+         L6b = L6b / Glutamatergic,
+         Pvalb = Pvalb / GABAergic,
+         Sst = Sst / GABAergic,
+         Vip = Vip / GABAergic,
+         Lamp5 = Lamp5 / GABAergic,
+         Frem1 = Frem1 / GABAergic, 
+         Stac = Stac / GABAergic, 
+         Astro = Astro / Nonneuronal,
+         Micro = Micro / Nonneuronal,
+         OD = OD / Nonneuronal,
+         OPC = OPC / Nonneuronal,
+         Endo = Endo / Nonneuronal, 
+         VLMC = VLMC / Nonneuronal, 
+         Neuronal = Glutamatergic + GABAergic, 
+         Glutamatergic = Glutamatergic / Neuronal, 
+         GABAergic = GABAergic / Neuronal)
+
+# Convert to long format
+all.props.long <- all.props %>%
+  pivot_longer(cols = c("MGE", "CGE", "IT", "L5NP", "L5PT", "L6CT", "L6b", 
+                       "Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac", 
+                       "Astro", "Micro", "OD", "OPC", "Endo", "VLMC",
+                       "Glutamatergic", "GABAergic"),
+               names_to = "cell.identity", 
+               values_to = "fraction")
+
+all.props.long$species <- factor(all.props.long$species, levels = c("Opossum", "Mouse"))
+```
+
+```{r fig_1G, fig.height=3.6, fig.width=2.75}
+# Figure S1G: Glutamatergic vs GABAergic proportions
+curr.props <- all.props.long[all.props.long$cell.identity %in% c("Glutamatergic", "GABAergic"), ]
+
+p <- ggplot(curr.props, aes(x = factor(cell.identity, level = c("Glutamatergic", "GABAergic")), 
+                            y = fraction, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1) +
+  scale_x_discrete(labels = c("Glutamatergic", "GABAergic")) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1.0), expand = c(0, 0), 
+                     limits = c(0, 1.0)) +
+  guides(fill = guide_legend(override.aes = list(shape = NA))) +
+  theme_classic() + 
+  theme(axis.text = element_text(color = "black"), 
+        legend.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+  labs(x = NULL, y = "Fraction of Neuronal Cells", fill = NULL) + 
+  scale_fill_manual("legend", values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+
+print(p)
+
+res.aov <- aov(fraction ~ species * cell.identity, data = curr.props)
+tukey <- TukeyHSD(res.aov, which = "species:cell.identity")
+print(tukey)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1G_OpossumMouse-GlutGABAClass-Props-BarPlot")
+```
+
+```{r fig_1H, fig.height=3.1, fig.width=4}
+# Figure S1H: Glutamatergic subclass proportions
+curr.props <- all.props.long[all.props.long$cell.identity %in% c("IT", "L5NP", "L5PT", "L6CT", "L6b"), ]
+
+p <- ggplot(curr.props, aes(x = factor(cell.identity, level = c("IT", "L5NP", "L5PT", "L6CT", "L6b")), 
+                            y = fraction, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1) +
+  scale_x_discrete(labels = c("IT", "L5NP", "L5PT", "L6CT", "L6b")) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8), expand = c(0, 0), 
+                     limits = c(0, 0.80)) +
+  guides(fill = guide_legend(override.aes = list(shape = NA))) +
+  theme_classic() + 
+  theme(axis.text = element_text(color = "black"), 
+        legend.text = element_text(size = 10)) + 
+  labs(x = NULL, y = "Fraction of Glutamatergic Cells", fill = NULL) + 
+  scale_fill_manual("legend", values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+
+print(p)
+
+res.aov <- aov(fraction ~ species * cell.identity, data = curr.props)
+tukey <- TukeyHSD(res.aov, which = "species:cell.identity")
+print(tukey)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1H_OpossumMouse-Glutamatergic-Props-BarPlot")
+```
+
+```{r fig_1I, fig.height=3.6, fig.width=2.75}
+# Figure S1I: MGE vs CGE proportions
+curr.props <- all.props.long[all.props.long$cell.identity %in% c("MGE", "CGE"), ]
+
+p <- ggplot(curr.props, aes(x = factor(cell.identity, level = c("MGE", "CGE")), 
+                            y = fraction, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1) +
+  scale_x_discrete(labels = c("MGE", "CGE")) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1.0), expand = c(0, 0), 
+                     limits = c(0, 1.0)) +
+  guides(fill = guide_legend(override.aes = list(shape = NA))) +
+  theme_classic() + 
+  theme(axis.text = element_text(color = "black"), 
+        legend.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) + 
+  labs(x = NULL, y = "Fraction of GABAergic Cells", fill = NULL) + 
+  scale_fill_manual("legend", values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+
+print(p)
+
+res.aov <- aov(fraction ~ species * cell.identity, data = curr.props)
+tukey <- TukeyHSD(res.aov, which = "species:cell.identity")
+print(tukey)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1I_OpossumMouse-MGECGE-Props-BarPlot")
+```
+
+```{r fig_1J, fig.height=3.1, fig.width=4.5}
+# Figure S1J: GABAergic subclass proportions
+curr.props <- all.props.long[all.props.long$cell.identity %in% c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac"), ]
+
+p <- ggplot(curr.props, aes(x = factor(cell.identity, level = c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")), 
+                            y = fraction, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1) +
+  scale_x_discrete(labels = c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6), expand = c(0, 0), 
+                     limits = c(0, 0.6001)) +
+  guides(fill = guide_legend(override.aes = list(shape = NA))) +
+  theme_classic() + 
+  theme(axis.text = element_text(color = "black"), 
+        legend.text = element_text(size = 10)) + 
+  labs(x = NULL, y = "Fraction of GABAergic Cells", fill = NULL) + 
+  scale_fill_manual("legend", values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+
+print(p)
+
+res.aov <- aov(fraction ~ species * cell.identity, data = curr.props)
+tukey <- TukeyHSD(res.aov, which = "species:cell.identity")
+print(tukey)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1J_OpossumMouse-GABAergic-Props-BarPlot")
+```
+
+```{r fig_1K, fig.height=3, fig.width=4.5}
+# Figure S1K: Nonneuronal subclass proportions
+curr.props <- all.props.long[all.props.long$cell.identity %in% c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC"), ]
+
+p <- ggplot(curr.props, aes(x = factor(cell.identity, level = c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC")), 
+                            y = fraction, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1) +
+  scale_x_discrete(labels = c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC")) +
+  scale_y_continuous(breaks = c(0, 0.2, 0.4, 0.6, 0.8), expand = c(0, 0), 
+                     limits = c(0, 0.60)) +
+  guides(fill = guide_legend(override.aes = list(shape = NA))) +
+  theme_classic() + 
+  theme(axis.text = element_text(color = "black"), 
+        legend.text = element_text(size = 10)) + 
+  labs(x = NULL, y = "Fraction of Nonneuronal Cells", fill = NULL) + 
+  scale_fill_manual("legend", values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+
+print(p)
+
+res.aov <- aov(fraction ~ species * cell.identity, data = curr.props)
+tukey <- TukeyHSD(res.aov, which = "species:cell.identity")
+print(tukey)
+
+SavePNGandSVG(p, dir.list$fig1$plots, "1K_OpossumMouse-Nonneuronal-Props-BarPlot")
+```

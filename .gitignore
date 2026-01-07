@@ -1,0 +1,13 @@
+**/GSE*
+*.mtx
+*.html
+*.gz
+*.h5ad
+*.rds
+*.RData
+*.gtf
+*.bed
+*.fai
+*.
+__pycache__/
+TOM/

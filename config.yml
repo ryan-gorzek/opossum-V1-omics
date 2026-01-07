@@ -1,0 +1,101 @@
+# config.yml
+
+tools_path: "E:/Ryan/GitHub/"                 # location of comparatome and other tools
+root_path: "E:/Ryan/GitHub/opossum-V1-omics"  # project root
+
+dir:
+  # Top-level analysis folders (relative to root_path)
+  preprocessing:
+    plots: "preprocessing/plots"
+    data:  "preprocessing/data"
+
+  central: "central"                   # base central dir
+
+  fig1:
+    plots: "figure 1/plots"
+    data:  "figure 1/data"
+  fig2:
+    plots: "figure 2/plots"
+    data:  "figure 2/data"
+  fig3:
+    plots: "figure 3/plots"
+    data:  "figure 3/data"
+  fig4:
+    plots: "figure 4/plots"
+    data:  "figure 4/data"
+  figS1:
+    plots: "figure S1/plots"
+    data:  "figure S1/data"
+  figS2:
+    plots: "figure S2/plots"
+    data:  "figure S2/data"
+  figS3:
+    plots: "figure S3/plots"
+    data:  "figure S3/data"
+  figS4:
+    plots: "figure S4/plots"
+    data:  "figure S4/data"
+
+  # Single-nucleus RNA-seq paths
+  snrna:
+    seurat:
+      raw:       "central/snrna/seurat/raw"
+      processed: "central/snrna/seurat/processed"
+    anndata:
+    #   raw:       "central/snrna/anndata/raw"
+    #   processed: "central/snrna/anndata/processed"
+
+  # Spatial transcriptomics paths
+  spatial:
+    seurat:
+      # raw:       "central/spatial/seurat/raw"
+      processed: "central/spatial/seurat/processed"
+    anndata:
+      # raw:       "central/spatial/anndata/raw"
+      # processed: "central/spatial/anndata/processed"
+
+geo:
+  samples_opossum:
+    OpossumV1-1A: "GSM9038449"
+    OpossumV1-1B: "GSM9038449"
+    OpossumV1-2A: "GSM9038450"
+    OpossumV1-2B: "GSM9038450"
+
+  file_types:
+    - "barcodes.tsv.gz"
+    - "features.tsv.gz"
+    - "matrix.mtx.gz"
+
+colors:
+    # Species
+    Opossum: "#C692B8"
+    Mouse:   "#AAAAAA"
+    # Glutamatergic Subclasses
+    IT:      "#FF6C88"
+    IT_A:    "#FFB3B3"
+    L2/3:    "#FFB3B3"
+    IT_C:    "#FFA07A"
+    L4:      "#FF7F50"
+    IT_B:    "#FF7F50"
+    L5IT:    "#FFA07A"
+    IT_D:    "#FF6347"
+    L6IT:    "#FF6347"
+    L5NP:    "#FF4500"
+    L5PT:    "#FF8C69"
+    L6CT:    "#FF6347"
+    L6b:     "#FFA07A"
+    None:    "#A0A0A0"
+    # GABAergic Subclasses
+    Pvalb:   "#1E90FF"
+    Sst:     "#87CEEB"
+    Vip:     "#87CEFA"
+    Lamp5:   "#4682B4"
+    Frem1:   "#ADD8E6"
+    Stac:    "#5F9EA0"
+    # Non-neuronal Subclasses
+    Astro:   "#8C8C8C"
+    Micro:   "#A0A0A0"
+    OD:      "#B4B4B4"
+    OPC:     "#C8C8C8"
+    Endo:    "#505050"
+    VLMC:    "#B4B4B4"

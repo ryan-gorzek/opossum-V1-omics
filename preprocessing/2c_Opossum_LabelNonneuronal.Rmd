@@ -1,0 +1,290 @@
+---
+title: "2c. Opossum, Label Nonneuronal"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(clustree)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load preprocessed nonneuronal cells
+obj.opossum.nonneuronal <- readRDS(paste0(dir.list$snrna$seurat$raw, "opossum_v1_nonneuronal_raw.rds"))
+```
+
+```{r initial_clustering}
+# Initial clustering
+obj.opossum.nonneuronal <- ClusterWithSCT(obj.opossum.nonneuronal, 1)
+clust.plots <- PlotClusters(obj.opossum.nonneuronal)
+# Save plots for Figure S1
+save.plots <- list("dimplot_cluster" = "S1M_Opossum-Nonneuronal-Cluster-DimPlot")
+for (sp in names(save.plots)) {
+  SavePNGandSVG(clust.plots[[sp]], dir.list$figS1$plots, save.plots[[sp]])
+}
+```
+
+```{r canonical_markers}
+# Define canonical nonneuronal markers
+canon.markers <- list(
+  Astro = c("Aldh1l1", "Grin2c", "Phkg1"), 
+  Endo = c("Pecam1", "Mecom", "Flt1"), 
+  Micro = c("Cx3cr1", "Arhgap45", "Inpp5d"), 
+  Oligo = c("Enpp6", "Mog", "St18"), 
+  OPC = c("Lhfpl3", "Pdgfra", "Cacng4"),
+  VLMC = c("Slc6a13", "Slc47a1", "Bnc2")
+)
+
+# Visualize canonical markers
+DefaultAssay(obj.opossum.nonneuronal) <- "RNA"
+Idents(obj.opossum.nonneuronal) <- "SCT_snn_res.1"
+PlotFeatures(obj.opossum.nonneuronal, canon.markers)
+DotPlot(obj.opossum.nonneuronal, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+  theme(panel.background = element_rect(fill = "white", color = NA), 
+        plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r filter_clusters}
+# Filter low-quality clusters
+obj.opossum.nonneuronal.prefilt <- obj.opossum.nonneuronal
+obj.opossum.nonneuronal <- subset(obj.opossum.nonneuronal, idents = c(7, 10, 11, 14, 16), invert = TRUE)
+```
+
+```{r multi_resolution_clustering}
+# Cluster at multiple resolutions
+obj.opossum.nonneuronal <- ClusterWithSCT(obj.opossum.nonneuronal, c(1, 1.5, 2))
+
+# Visualize clusters
+PlotClusters(obj.opossum.nonneuronal, group.id = "SCT_snn_res.1")
+PlotClusters(obj.opossum.nonneuronal, group.id = "SCT_snn_res.1.5")
+PlotClusters(obj.opossum.nonneuronal, group.id = "SCT_snn_res.2")
+
+# Verify markers after filtering
+DefaultAssay(obj.opossum.nonneuronal) <- "RNA"
+Idents(obj.opossum.nonneuronal) <- "SCT_snn_res.1"
+PlotFeatures(obj.opossum.nonneuronal, canon.markers)
+DotPlot(obj.opossum.nonneuronal, features = canon.markers, cols = c("lightgrey", "red"), scale = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25)) + 
+  theme(panel.background = element_rect(fill = "white", color = NA), 
+        plot.background = element_rect(fill = "white", color = NA)) + NoLegend()
+```
+
+```{r clustree}
+# Visualize cluster relationships
+clustree(obj.opossum.nonneuronal, prefix = "SCT_snn_res.")
+```
+
+```{r assign_subclasses}
+# Assign subclasses based on marker expression
+subclass.idx.opossum <- list()
+
+subclass.idx.opossum$SCT_snn_res.1$Astro <- c("4", "6", "8")
+subclass.idx.opossum$SCT_snn_res.1.5$Astro <- c("3", "8", "11", "13")
+
+subclass.idx.opossum$SCT_snn_res.1$Micro <- c("7")
+subclass.idx.opossum$SCT_snn_res.1.5$Micro <- c("5")
+
+subclass.idx.opossum$SCT_snn_res.1$OD <- c("1", "3", "5", "9", "11")
+subclass.idx.opossum$SCT_snn_res.1.5$OD <- c("1", "2", "6", "7", "9", "12", "15")
+
+subclass.idx.opossum$SCT_snn_res.1$OPC <- c("2", "12")
+subclass.idx.opossum$SCT_snn_res.1.5$OPC <- c("4", "10", "16")
+
+subclass.idx.opossum$SCT_snn_res.1$Endo <- c("10")
+subclass.idx.opossum$SCT_snn_res.1.5$Endo <- c("14")
+
+obj.opossum.nonneuronal <- SubclassByIdent(obj.opossum.nonneuronal, subclass.idx.opossum)
+```
+
+```{r compute_cluster_markers}
+# Compute differential expression markers
+subclass.labels <- c("Astro", "OD", "OPC")
+ident.labels <- c("SCT_snn_res.1", "SCT_snn_res.1.5")
+
+markers.opossum.nonneuronal <- IdentMarkerDict(
+  obj.opossum.nonneuronal, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$data, "opossum/nonneuronal/markerdict_clusters.rds")
+)
+
+SaveDotPlots(
+  obj.opossum.nonneuronal, 
+  markers.opossum.nonneuronal,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/"),
+  "ENSMODG"
+)
+
+SaveFeaturePlots(
+  obj.opossum.nonneuronal, 
+  markers.opossum.nonneuronal,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/")
+)
+```
+
+```{r plot_gene_counts}
+# Plot differential gene counts
+for (sbcl in subclass.labels) {
+  for (id in ident.labels) {
+    p <- PlotIdentGeneCounts(markers.opossum.nonneuronal, sbcl, id)
+    p <- p + theme(aspect.ratio = 1)
+    print(p)
+  }
+}
+```
+
+```{r train_test_confusion}
+# Generate confusion matrices using 50-50 train-test splits
+SaveIdentConfusionMatrices(
+  obj.opossum.nonneuronal, 
+  subclass.labels, 
+  ident.labels, 
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/")
+)
+```
+
+```{r label_cells}
+# Assign final labels
+obj.opossum.nonneuronal$subclass <- NA
+obj.opossum.nonneuronal$type <- NA
+
+subclass.resolutions <- rev(list(
+  Astro = 1, 
+  Micro = 1, 
+  OD = 1, 
+  OPC = 1, 
+  Endo = 1
+))
+obj.opossum.nonneuronal <- LabelCells(obj.opossum.nonneuronal, subclass.resolutions)
+```
+
+```{r NA_subclass_type}
+# Check UMAP for cells with NA subclass or type
+# These could arise when partitioning with different clustering resolutions
+for (label in c("subclass", "type")) { 
+  if (any(is.na(obj.opossum.nonneuronal@meta.data[[label]]))) {
+    # Assign labels for NA cells using nearest neighbors
+    label.nn <- paste0(label, ".nn")
+    obj.opossum.nonneuronal <- LabelByNearestNeighbors(
+      obj.opossum.nonneuronal,
+      ident = label,
+      output_col = label.nn,
+      reduction = "pca",
+      dims = 1:30,
+      fraction = 0.20,
+      n.neighbors = 50
+    )
+    # Check NN assignments
+    print(table(obj.opossum.nonneuronal@meta.data[[label.nn]]))
+    # Transfer to final labels
+    na.cells <- is.na(obj.opossum.nonneuronal@meta.data[[label]])
+    obj.opossum.nonneuronal@meta.data[[label]][na.cells] <- obj.opossum.nonneuronal@meta.data[[label.nn]][na.cells]
+    # Re-check for unassigned cells (called "None", NA are already labeled cells in new column)
+    print(any(obj.opossum.nonneuronal@meta.data[[label]] == "None"))
+  }
+}
+```
+
+```{r visualize_labels}
+# Visualize final assignments
+DimPlot(obj.opossum.nonneuronal, reduction = "umap", group.by = "subclass", label = TRUE, raster = FALSE) + 
+  NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+DimPlot(obj.opossum.nonneuronal, reduction = "umap", group.by = "type", label = TRUE, raster = FALSE) + 
+  NoLegend() + xlim(-18, 18) + ylim(-18, 18) + coord_equal()
+```
+
+```{r subclass_proportions}
+# Plot subclass proportions
+Idents(obj.opossum.nonneuronal) <- "subclass"
+levels(obj.opossum.nonneuronal) <- c("Astro", "Micro", "OD", "OPC", "Endo")
+
+IdentBySample(obj.opossum.nonneuronal, y_limits = c(0, 0.60))
+```
+
+```{r compute_type_markers}
+# Compute markers for final types
+subclass.labels <- c("Astro", "OD", "OPC")
+ident.labels <- c("type")
+
+subclass.markers.opossum.nonneuronal <- SubclassMarkerDict(
+  obj.opossum.nonneuronal, 
+  "subclass",
+  paste0(dir.list$pre$data, "opossum/nonneuronal/markerdict_subclass.rds")
+)
+
+markers.opossum.nonneuronal <- IdentMarkerDict(
+  obj.opossum.nonneuronal, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$data, "opossum/nonneuronal/markerdict_types.rds")
+)
+
+SaveDotPlots(
+  obj.opossum.nonneuronal, 
+  markers.opossum.nonneuronal,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/"),
+  "ENSMODG"
+)
+
+SaveFeaturePlots(
+  obj.opossum.nonneuronal, 
+  markers.opossum.nonneuronal,
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/")
+)
+
+PlotSubclassGeneCounts(
+  subclass.markers.opossum.nonneuronal, 
+  "subclass", 
+  c("Astro", "Micro", "OD", "OPC", "Endo")
+) + theme(aspect.ratio = 1)
+
+for (sbcl in subclass.labels) {
+  for (id in ident.labels) {
+    p <- PlotIdentGeneCounts(markers.opossum.nonneuronal, sbcl, id)
+    p <- p + theme(aspect.ratio = 1)
+    print(p)
+  }
+}
+```
+
+```{r final_confusion_matrices}
+# Generate final confusion matrices
+SaveSubclassConfusionMatrices(
+  obj.opossum.nonneuronal, 
+  "subclass",
+  c("Astro", "Micro", "OD", "OPC", "Endo"),
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/")
+)
+
+SaveIdentConfusionMatrices(
+  obj.opossum.nonneuronal, 
+  subclass.labels, 
+  ident.labels,
+  paste0(dir.list$pre$plots, "opossum/nonneuronal/")
+)
+```
+
+```{r save_object}
+# Save processed object
+saveRDS(obj.opossum.nonneuronal, paste0(dir.list$snrna$seurat$processed, "opossum_v1_nonneuronal_processed.rds"))
+```
