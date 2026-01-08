@@ -5,7 +5,7 @@ output:
 
 ```{r setup, include=FALSE}
 # This sets the project root based on the repo structure.
-# If you move this file, you may to set the root manually to find config.R
+# If you move this file, you may need to set the root manually to find config.R
 knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
