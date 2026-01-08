@@ -1,0 +1,681 @@
+---
+title: "Opossum Spatial Labeling: Iterative Integration with snRNA-seq Reference"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(comparatome)
+source("config.R")
+```
+
+# Load Reference Data
+
+```{r load_reference}
+obj.ref.glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+obj.ref.glutamatergic <- ClusterWithSCT(obj.ref.glutamatergic, c(0.3))
+obj.ref.gabaergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_gabaergic_processed.rds"))
+obj.ref.nonneuronal <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_nonneuronal_processed.rds"))
+
+obj.ref.glutamatergic$class <- "glutamatergic"
+obj.ref.gabaergic$class <- "gabaergic"
+obj.ref.nonneuronal$class <- "nonneuronal"
+
+obj.ref <- merge(obj.ref.glutamatergic, y = c(obj.ref.gabaergic, obj.ref.nonneuronal))
+obj.ref$method <- "snRNA-seq"
+
+cat(sprintf("Reference: %d cells, %d genes\n", ncol(obj.ref), nrow(obj.ref)))
+cat("\nClass distribution:\n")
+print(table(obj.ref$class))
+cat("\nSubclass distribution:\n")
+print(table(obj.ref$subclass))
+```
+
+# Load Spatial Data
+
+```{r load_spatial}
+obj.ctx <- readRDS(paste0(dir.list$spatial$seurat$processed, "opossum_combined_columns.rds"))
+
+cat(sprintf("Spatial: %d cells, %d genes\n", ncol(obj.ctx), nrow(obj.ctx)))
+```
+
+# Iterative Class Integration
+
+```{r class_setup}
+n_spatial_initial <- ncol(obj.ctx)
+obj.ctx$class_nn <- NA
+
+obj.working <- obj.ctx
+obj.working@images <- list()
+
+cat(sprintf("\n=== CLASS INTEGRATION SETUP ===\n"))
+cat(sprintf("Initial spatial cells: %d\n", n_spatial_initial))
+```
+
+## Class Round 1: 100% of 50 NN, Subsample
+
+```{r class_round1_integrate}
+cat(sprintf("\n=== CLASS ROUND 1 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$class_nn) | obj.working$class_nn == "None"]
+cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+
+obj.subset <- subset(obj.working, cells = unlabeled_cells)
+obj.subset$method <- "Stereo-seq"
+
+obj.i.class.r1 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = TRUE)
+cat(sprintf("Integrated: %d cells\n", ncol(obj.i.class.r1)))
+```
+
+```{r class_round1_label}
+obj.i.class.r1 <- LabelByNearestNeighbors(
+  obj.i.class.r1,
+  ident = "class",
+  output_col = "class_nn",
+  reduction = "pca",
+  dims = 1:30,
+  fraction = 1.0,
+  n.neighbors = 50,
+  reference_pool = "labeled"
+)
+
+cat("\nLabel distribution:\n")
+spatial_cells <- colnames(obj.i.class.r1)[obj.i.class.r1$method == "Stereo-seq"]
+print(table(obj.i.class.r1$class_nn[spatial_cells], useNA = "ifany"))
+```
+
+```{r class_round1_visualize}
+p1 <- DimPlot(obj.i.class.r1, group.by = "method", pt.size = 0.5) +
+  ggtitle("Class R1: Integration Mixing") + coord_equal()
+p2 <- DimPlot(obj.i.class.r1, group.by = "class_nn", pt.size = 0.5) +
+  ggtitle("Class R1: Transferred Classes") + coord_equal()
+print(p1 + p2)
+```
+
+```{r class_round1_visualize_save}
+class.colors <- c(
+ "glutamatergic" = "#00BA38",
+  "gabaergic" = "#F8766D",
+  "nonneuronal" = "#619CFF",
+  "None" = "#A89880"  # light tan
+)
+
+p <- DimPlot(obj.i.class.r1, group.by = "class_nn", pt.size = 0.1, 
+        cols = class.colors, na.value = "#505050") + 
+  xlim(-12, 15) + ylim(-13, 14) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4E_Opossum-ClassRound1-UMAP")
+```
+
+```{r class_round1_update}
+spatial_cells_in_integration <- intersect(colnames(obj.i.class.r1), unlabeled_cells)
+new_labels <- obj.i.class.r1$class_nn[spatial_cells_in_integration]
+
+for (cell_id in names(new_labels)) {
+  if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+    obj.working$class_nn[cell_id] <- new_labels[cell_id]
+    obj.ctx$class_nn[cell_id] <- new_labels[cell_id]
+  }
+}
+
+n_total_labeled <- sum(!is.na(obj.ctx$class_nn) & obj.ctx$class_nn != "None")
+n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+
+cat(sprintf("\nRound 1 results:\n"))
+cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_initial, 100 * n_total_labeled / n_spatial_initial))
+```
+
+## Class Round 2: 100% of 50 NN, No Subsample
+
+```{r class_round2_integrate}
+cat(sprintf("\n=== CLASS ROUND 2 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$class_nn) | obj.working$class_nn == "None"]
+
+if (length(unlabeled_cells) == 0) {
+  cat("All cells labeled. Skipping.\n")
+} else {
+  cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+  
+  obj.subset <- subset(obj.working, cells = unlabeled_cells)
+  obj.subset$method <- "Stereo-seq"
+  
+  obj.i.class.r2 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = FALSE)
+  cat(sprintf("Integrated: %d cells\n", ncol(obj.i.class.r2)))
+}
+```
+
+```{r class_round2_label}
+if (length(unlabeled_cells) > 0) {
+  obj.i.class.r2 <- LabelByNearestNeighbors(
+    obj.i.class.r2,
+    ident = "class",
+    output_col = "class_nn",
+    reduction = "pca",
+    dims = 1:30,
+    fraction = 1.0,
+    n.neighbors = 50,
+    reference_pool = "labeled"
+  )
+  
+  cat("\nLabel distribution:\n")
+  spatial_cells <- colnames(obj.i.class.r2)[obj.i.class.r2$method == "Stereo-seq"]
+  print(table(obj.i.class.r2$class_nn[spatial_cells], useNA = "ifany"))
+}
+```
+
+```{r class_round2_visualize}
+if (length(unlabeled_cells) > 0) {
+  p1 <- DimPlot(obj.i.class.r2, group.by = "method", pt.size = 0.5) +
+    ggtitle("Class R2: Integration Mixing") + coord_equal()
+  p2 <- DimPlot(obj.i.class.r2, group.by = "class_nn", pt.size = 0.5) +
+    ggtitle("Class R2: Transferred Classes") + coord_equal()
+  print(p1 + p2)
+}
+```
+
+```{r class_round2_visualize_save}
+class.colors <- c(
+ "glutamatergic" = "#00BA38",
+  "gabaergic" = "#F8766D",
+  "nonneuronal" = "#619CFF",
+  "None" = "#A89880"  # light tan
+)
+
+p <- DimPlot(obj.i.class.r2, group.by = "class_nn", pt.size = 0.1, 
+        cols = class.colors, na.value = "#505050") + 
+  xlim(-15, 13) + ylim(-11, 17) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4F_Opossum-ClassRound2-UMAP")
+```
+
+```{r class_round2_update}
+if (length(unlabeled_cells) > 0) {
+  spatial_cells_in_integration <- intersect(colnames(obj.i.class.r2), unlabeled_cells)
+  new_labels <- obj.i.class.r2$class_nn[spatial_cells_in_integration]
+  
+  for (cell_id in names(new_labels)) {
+    if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+      obj.working$class_nn[cell_id] <- new_labels[cell_id]
+      obj.ctx$class_nn[cell_id] <- new_labels[cell_id]
+    }
+  }
+  
+  n_total_labeled <- sum(!is.na(obj.ctx$class_nn) & obj.ctx$class_nn != "None")
+  n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+  
+  cat(sprintf("\nRound 2 results:\n"))
+  cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+  cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_initial, 100 * n_total_labeled / n_spatial_initial))
+}
+```
+
+## Class Round 3: 75% of 50 NN, No Subsample
+
+```{r class_round3_integrate}
+cat(sprintf("\n=== CLASS ROUND 3 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$class_nn) | obj.working$class_nn == "None"]
+
+if (length(unlabeled_cells) == 0) {
+  cat("All cells labeled. Skipping.\n")
+} else {
+  cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+  
+  obj.subset <- subset(obj.working, cells = unlabeled_cells)
+  obj.subset$method <- "Stereo-seq"
+  
+  obj.i.class.r3 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = FALSE)
+  cat(sprintf("Integrated: %d cells\n", ncol(obj.i.class.r3)))
+}
+```
+
+```{r class_round3_label}
+if (length(unlabeled_cells) > 0) {
+  obj.i.class.r3 <- LabelByNearestNeighbors(
+    obj.i.class.r3,
+    ident = "class",
+    output_col = "class_nn",
+    reduction = "pca",
+    dims = 1:30,
+    fraction = 0.75,
+    n.neighbors = 50,
+    reference_pool = "labeled"
+  )
+  
+  cat("\nLabel distribution:\n")
+  spatial_cells <- colnames(obj.i.class.r3)[obj.i.class.r3$method == "Stereo-seq"]
+  print(table(obj.i.class.r3$class_nn[spatial_cells], useNA = "ifany"))
+}
+```
+
+```{r class_round3_visualize}
+if (length(unlabeled_cells) > 0) {
+  p1 <- DimPlot(obj.i.class.r3, group.by = "method", pt.size = 0.5) +
+    ggtitle("Class R3: Integration Mixing") + coord_equal()
+  p2 <- DimPlot(obj.i.class.r3, group.by = "class_nn", pt.size = 0.5) +
+    ggtitle("Class R3: Transferred Classes") + coord_equal()
+  print(p1 + p2)
+}
+```
+
+```{r class_round3_visualize_save}
+class.colors <- c(
+ "glutamatergic" = "#00BA38",
+  "gabaergic" = "#F8766D",
+  "nonneuronal" = "#619CFF",
+  "None" = "#A89880"  # light tan
+)
+
+p <- DimPlot(obj.i.class.r3, group.by = "class_nn", pt.size = 0.1, 
+        cols = class.colors, na.value = "#505050") + 
+  xlim(-17, 13) + ylim(-15, 15) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4G_Opossum-ClassRound3-UMAP")
+```
+
+```{r class_round3_update}
+if (length(unlabeled_cells) > 0) {
+  spatial_cells_in_integration <- intersect(colnames(obj.i.class.r3), unlabeled_cells)
+  new_labels <- obj.i.class.r3$class_nn[spatial_cells_in_integration]
+  
+  for (cell_id in names(new_labels)) {
+    if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+      obj.working$class_nn[cell_id] <- new_labels[cell_id]
+      obj.ctx$class_nn[cell_id] <- new_labels[cell_id]
+    }
+  }
+  
+  n_total_labeled <- sum(!is.na(obj.ctx$class_nn) & obj.ctx$class_nn != "None")
+  n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+  
+  cat(sprintf("\nRound 3 results:\n"))
+  cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+  cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_initial, 100 * n_total_labeled / n_spatial_initial))
+}
+```
+
+## Class Integration Summary
+
+```{r class_summary}
+valid_classes <- c("glutamatergic", "gabaergic", "nonneuronal")
+obj.ctx <- subset(obj.ctx, class_nn %in% valid_classes)
+n_after_class_filter <- ncol(obj.ctx)
+
+cat(sprintf("\n=== CLASS INTEGRATION COMPLETE ===\n"))
+cat(sprintf("Initial: %d cells\n", n_spatial_initial))
+cat(sprintf("After class labeling: %d cells (%.1f%%)\n", n_after_class_filter, 100 * n_after_class_filter / n_spatial_initial))
+cat("\nFinal class distribution:\n")
+print(table(obj.ctx$class_nn))
+print(table(obj.ctx$sample, obj.ctx$class_nn))
+```
+
+```{r class_spatial_plot, fig.width=12, fig.height=6}
+Idents(obj.ctx) <- "class_nn"
+ImageDimPlot(obj.ctx, fov = "COL", size = 1.5, axes = TRUE) +
+  ggtitle("Spatial: Class Labels After Iterative Integration")
+```
+
+# Iterative Subclass Integration
+
+```{r subclass_setup}
+n_spatial_for_subclass <- ncol(obj.ctx)
+obj.ctx$subclass_nn <- NA
+
+obj.working <- obj.ctx
+obj.working@images <- list()
+
+cat(sprintf("\n=== SUBCLASS INTEGRATION SETUP ===\n"))
+cat(sprintf("Spatial cells for subclass labeling: %d\n", n_spatial_for_subclass))
+```
+
+## Subclass Round 1: 100% of 50 NN, Subsample
+
+```{r subclass_round1_integrate}
+cat(sprintf("\n=== SUBCLASS ROUND 1 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$subclass_nn) | obj.working$subclass_nn == "None"]
+cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+
+obj.subset <- subset(obj.working, cells = unlabeled_cells)
+obj.subset$method <- "Stereo-seq"
+
+obj.i.sub.r1 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = TRUE)
+cat(sprintf("Integrated: %d cells\n", ncol(obj.i.sub.r1)))
+```
+
+```{r subclass_round1_label}
+obj.i.sub.r1 <- LabelByNearestNeighbors(
+  obj.i.sub.r1,
+  ident = "subclass",
+  output_col = "subclass_nn",
+  reduction = "pca",
+  dims = 1:30,
+  fraction = 1.0,
+  n.neighbors = 50,
+  reference_pool = "labeled"
+)
+
+cat("\nLabel distribution:\n")
+spatial_cells <- colnames(obj.i.sub.r1)[obj.i.sub.r1$method == "Stereo-seq"]
+print(table(obj.i.sub.r1$subclass_nn[spatial_cells], useNA = "ifany"))
+```
+
+```{r subclass_round1_visualize}
+p1 <- DimPlot(obj.i.sub.r1, group.by = "method", pt.size = 0.5) +
+  ggtitle("Subclass R1: Integration Mixing") + coord_equal()
+p2 <- DimPlot(obj.i.sub.r1, group.by = "subclass_nn", pt.size = 0.5, label = TRUE) + NoLegend() +
+  ggtitle("Subclass R1: Transferred Subclasses") + coord_equal()
+print(p1 + p2)
+```
+
+```{r subclass_round1_visualize_save}
+colors <- get_colors()
+
+# Build subclass color vector from config
+subclass.colors <- unlist(colors)
+subclass.colors["None"] <- "#7A9A7A"  # muted green
+
+p <- DimPlot(obj.i.sub.r1, group.by = "subclass_nn", pt.size = 0.5, 
+        cols = subclass.colors, na.value = "#8F8F8F", label = TRUE) + 
+  xlim(-11, 14) + ylim(-12, 12) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4H_Opossum-SubclassRound1-UMAP")
+```
+
+```{r subclass_round1_update}
+spatial_cells_in_integration <- intersect(colnames(obj.i.sub.r1), unlabeled_cells)
+new_labels <- obj.i.sub.r1$subclass_nn[spatial_cells_in_integration]
+
+for (cell_id in names(new_labels)) {
+  if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+    obj.working$subclass_nn[cell_id] <- new_labels[cell_id]
+    obj.ctx$subclass_nn[cell_id] <- new_labels[cell_id]
+  }
+}
+
+n_total_labeled <- sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None")
+n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+
+cat(sprintf("\nRound 1 results:\n"))
+cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_for_subclass, 100 * n_total_labeled / n_spatial_for_subclass))
+```
+
+## Subclass Round 2: 75% of 50 NN, No Subsample
+
+```{r subclass_round2_integrate}
+cat(sprintf("\n=== SUBCLASS ROUND 2 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$subclass_nn) | obj.working$subclass_nn == "None"]
+
+if (length(unlabeled_cells) == 0) {
+  cat("All cells labeled. Skipping.\n")
+} else {
+  cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+  
+  obj.subset <- subset(obj.working, cells = unlabeled_cells)
+  obj.subset$method <- "Stereo-seq"
+  
+  obj.i.sub.r2 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = FALSE)
+  cat(sprintf("Integrated: %d cells\n", ncol(obj.i.sub.r2)))
+}
+```
+
+```{r subclass_round2_label}
+if (length(unlabeled_cells) > 0) {
+  obj.i.sub.r2 <- LabelByNearestNeighbors(
+    obj.i.sub.r2,
+    ident = "subclass",
+    output_col = "subclass_nn",
+    reduction = "pca",
+    dims = 1:30,
+    fraction = 0.75,
+    n.neighbors = 50,
+    reference_pool = "labeled"
+  )
+  
+  cat("\nLabel distribution:\n")
+  spatial_cells <- colnames(obj.i.sub.r2)[obj.i.sub.r2$method == "Stereo-seq"]
+  print(table(obj.i.sub.r2$subclass_nn[spatial_cells], useNA = "ifany"))
+}
+```
+
+```{r subclass_round2_visualize}
+if (length(unlabeled_cells) > 0) {
+  p1 <- DimPlot(obj.i.sub.r2, group.by = "method", pt.size = 0.5) +
+    ggtitle("Subclass R2: Integration Mixing") + coord_equal()
+  p2 <- DimPlot(obj.i.sub.r2, group.by = "subclass_nn", pt.size = 0.5, label = TRUE) + NoLegend() +
+    ggtitle("Subclass R2: Transferred Subclasses") + coord_equal()
+  print(p1 + p2)
+}
+```
+
+```{r subclass_round2_visualize_save}
+colors <- get_colors()
+
+# Build subclass color vector from config
+subclass.colors <- unlist(colors)
+subclass.colors["None"] <- "#7A9A7A"  # muted green
+
+p <- DimPlot(obj.i.sub.r2, group.by = "subclass_nn", pt.size = 0.5, 
+        cols = subclass.colors, na.value = "#8F8F8F", label = TRUE) + 
+  xlim(-11, 14) + ylim(-11, 13) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4I_Opossum-SubclassRound2-UMAP")
+```
+
+```{r subclass_round2_update}
+if (length(unlabeled_cells) > 0) {
+  spatial_cells_in_integration <- intersect(colnames(obj.i.sub.r2), unlabeled_cells)
+  new_labels <- obj.i.sub.r2$subclass_nn[spatial_cells_in_integration]
+  
+  for (cell_id in names(new_labels)) {
+    if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+      obj.working$subclass_nn[cell_id] <- new_labels[cell_id]
+      obj.ctx$subclass_nn[cell_id] <- new_labels[cell_id]
+    }
+  }
+  
+  n_total_labeled <- sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None")
+  n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+  
+  cat(sprintf("\nRound 2 results:\n"))
+  cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+  cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_for_subclass, 100 * n_total_labeled / n_spatial_for_subclass))
+}
+```
+
+## Subclass Round 3: 50% of 50 NN, No Subsample
+
+```{r subclass_round3_integrate}
+cat(sprintf("\n=== SUBCLASS ROUND 3 ===\n"))
+
+unlabeled_cells <- colnames(obj.working)[is.na(obj.working$subclass_nn) | obj.working$subclass_nn == "None"]
+
+if (length(unlabeled_cells) == 0) {
+  cat("All cells labeled. Skipping.\n")
+} else {
+  cat(sprintf("Cells to process: %d\n", length(unlabeled_cells)))
+  
+  obj.subset <- subset(obj.working, cells = unlabeled_cells)
+  obj.subset$method <- "Stereo-seq"
+  
+  obj.i.sub.r3 <- IntegrateObjects(obj.ref, obj.subset, resolutions = 0.5, subsample = FALSE)
+  cat(sprintf("Integrated: %d cells\n", ncol(obj.i.sub.r3)))
+}
+```
+
+```{r subclass_round3_label}
+if (length(unlabeled_cells) > 0) {
+  obj.i.sub.r3 <- LabelByNearestNeighbors(
+    obj.i.sub.r3,
+    ident = "subclass",
+    output_col = "subclass_nn",
+    reduction = "pca",
+    dims = 1:30,
+    fraction = 0.50,
+    n.neighbors = 50,
+    reference_pool = "labeled"
+  )
+  
+  cat("\nLabel distribution:\n")
+  spatial_cells <- colnames(obj.i.sub.r3)[obj.i.sub.r3$method == "Stereo-seq"]
+  print(table(obj.i.sub.r3$subclass_nn[spatial_cells], useNA = "ifany"))
+}
+```
+
+```{r subclass_round3_visualize}
+if (length(unlabeled_cells) > 0) {
+  p1 <- DimPlot(obj.i.sub.r3, group.by = "method", pt.size = 0.5) +
+    ggtitle("Subclass R3: Integration Mixing") + coord_equal()
+  p2 <- DimPlot(obj.i.sub.r3, group.by = "subclass_nn", pt.size = 0.5, label = TRUE) + NoLegend() +
+    ggtitle("Subclass R3: Transferred Subclasses") + coord_equal()
+  print(p1 + p2)
+}
+```
+
+```{r subclass_round3_visualize_save}
+colors <- get_colors()
+
+# Build subclass color vector from config
+subclass.colors <- unlist(colors)
+subclass.colors["None"] <- "#7A9A7A"  # muted green
+
+p <- DimPlot(obj.i.sub.r3, group.by = "subclass_nn", pt.size = 0.5, 
+        cols = subclass.colors, na.value = "#8F8F8F", label = TRUE) + 
+  xlim(-13, 15) + ylim(-13, 15) + coord_equal()
+print(p)
+SavePNGandSVG(p, dir.list$figS4$plots, "S4J_Opossum-SubclassRound3-UMAP")
+```
+
+```{r subclass_round3_update}
+if (length(unlabeled_cells) > 0) {
+  spatial_cells_in_integration <- intersect(colnames(obj.i.sub.r3), unlabeled_cells)
+  new_labels <- obj.i.sub.r3$subclass_nn[spatial_cells_in_integration]
+  
+  for (cell_id in names(new_labels)) {
+    if (!is.na(new_labels[cell_id]) && new_labels[cell_id] != "None") {
+      obj.working$subclass_nn[cell_id] <- new_labels[cell_id]
+      obj.ctx$subclass_nn[cell_id] <- new_labels[cell_id]
+    }
+  }
+  
+  n_total_labeled <- sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None")
+  n_round_labeled <- sum(!is.na(new_labels) & new_labels != "None")
+  
+  cat(sprintf("\nRound 3 results:\n"))
+  cat(sprintf("  Newly labeled: %d\n", n_round_labeled))
+  cat(sprintf("  Total labeled: %d/%d (%.1f%%)\n", n_total_labeled, n_spatial_for_subclass, 100 * n_total_labeled / n_spatial_for_subclass))
+}
+```
+
+## Subclass Integration Summary
+
+```{r subclass_summary}
+cat(sprintf("\n=== SUBCLASS INTEGRATION COMPLETE ===\n"))
+cat(sprintf("Spatial cells: %d\n", n_spatial_for_subclass))
+cat(sprintf("Subclass labeled: %d (%.1f%%)\n", 
+            sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None"),
+            100 * sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None") / n_spatial_for_subclass))
+cat("\nSubclass distribution:\n")
+print(table(obj.ctx$subclass_nn, useNA = "ifany"))
+```
+
+```{r subclass_spatial_plot, fig.width=12, fig.height=6}
+Idents(obj.ctx) <- "subclass_nn"
+ImageDimPlot(obj.ctx, fov = "COL", size = 3) +
+  ggtitle("Subclass Labels on Spatial Coordinates")
+```
+
+# Final Integration for Cluster Labels
+
+```{r final_integration}
+obj.i <- IntegrateObjects(obj.ref, obj.ctx, resolutions = 0.5, subsample = FALSE)
+
+obj.i <- LabelByNearestNeighbors(
+  obj.i, 
+  ident = "SCT_snn_res.0.2",
+  output_col = "SCT_snn_res.0.2_nn",
+  reduction = "pca",
+  dims = 1:30,
+  fraction = 0.5, 
+  n.neighbors = 50,
+  reference_pool = "labeled"
+)
+
+obj.i <- LabelByNearestNeighbors(
+  obj.i, 
+  ident = "SCT_snn_res.0.3",
+  output_col = "SCT_snn_res.0.3_nn",
+  reduction = "pca",
+  dims = 1:30,
+  fraction = 0.5, 
+  n.neighbors = 50,
+  reference_pool = "labeled"
+)
+```
+
+```{r transfer_cluster_labels}
+assigned_clusters <- obj.i$SCT_snn_res.0.2_nn[!is.na(obj.i$SCT_snn_res.0.2_nn)]
+cell_ids <- names(assigned_clusters)
+obj.ctx$SCT_snn_res.0.2_nn <- NA
+obj.ctx$SCT_snn_res.0.2_nn[cell_ids] <- assigned_clusters
+
+assigned_clusters <- obj.i$SCT_snn_res.0.3_nn[!is.na(obj.i$SCT_snn_res.0.3_nn)]
+cell_ids <- names(assigned_clusters)
+obj.ctx$SCT_snn_res.0.3_nn <- NA
+obj.ctx$SCT_snn_res.0.3_nn[cell_ids] <- assigned_clusters
+
+cat("Cluster labels transferred to spatial object\n")
+```
+
+```{r plot_cluster_labels}
+DimPlot(obj.i, group.by = "SCT_snn_res.0.2_nn", label = TRUE) + 
+  NoLegend() + coord_equal()
+DimPlot(obj.i, group.by = "SCT_snn_res.0.3_nn", label = TRUE) + 
+  NoLegend() + coord_equal()
+```
+
+# Save Results
+
+```{r save_integrated}
+saveRDS(obj.i, paste0(dir.list$spatial$seurat$processed, "opossum_stereoseq_integrated.rds"))
+cat("Saved integrated object\n")
+
+saveRDS(obj.ctx, paste0(dir.list$spatial$seurat$processed, "opossum_stereoseq_labeled.rds"))
+cat("Saved labeled spatial object\n")
+```
+
+# Pipeline Summary
+
+```{r summary}
+cat("\n=== PIPELINE SUMMARY ===\n")
+cat(sprintf("\nClass integration:\n"))
+cat(sprintf("  Initial: %d cells\n", n_spatial_initial))
+cat(sprintf("  After filtering: %d cells (%.1f%%)\n", n_after_class_filter, 100 * n_after_class_filter / n_spatial_initial))
+
+cat(sprintf("\nSubclass integration:\n"))
+cat(sprintf("  Started with: %d cells\n", n_spatial_for_subclass))
+cat(sprintf("  Labeled: %d cells (%.1f%%)\n",
+            sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None"),
+            100 * sum(!is.na(obj.ctx$subclass_nn) & obj.ctx$subclass_nn != "None") / n_spatial_for_subclass))
+
+cat("\nFinal class distribution:\n")
+print(table(obj.ctx$class_nn))
+
+cat("\nFinal subclass distribution:\n")
+print(table(obj.ctx$subclass_nn, useNA = "ifany"))
+```

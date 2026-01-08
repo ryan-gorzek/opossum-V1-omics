@@ -1,0 +1,329 @@
+---
+title: "Opossum Spatial Preprocessing: Subset and Combine Columns"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(dplyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_full_spatial}
+# Load complete raw Stereo-seq data
+data.path <- paste0(dir.list$central, "samples/Stereo-seq_Opossum/")
+mapping.path <- paste0(dir.list$central, "genome/Opossum_Mouse_GeneMapping_EnsemblBioMart.txt")
+
+obj.data <- Read10X(data.path, gene.column = 2)
+obj <- CreateSeuratObject(counts = obj.data, project = "Opossum_V1_Stereo-seq")
+obj$species <- "Opossum"
+obj$method <- "Stereo-seq"
+
+# Map genes to mouse orthologs right away
+cat("Mapping genes to mouse orthologs...\n")
+obj <- MapGenes(obj, mapping.path)
+
+cat(sprintf("Full dataset: %d cells, %d genes\n", ncol(obj), nrow(obj)))
+```
+
+```{r load_coordinates}
+# Load and transform spatial coordinates
+coords <- read.table(paste0(data.path, "coords.tsv.gz"), header = TRUE, sep = "\t")
+coords <- coords[match(colnames(obj), coords$barcodes), ]
+obj <- AddMetaData(obj, coords$X * -1, "X")
+obj <- AddMetaData(obj, coords$Y * -1, "Y")
+```
+
+```{r define_column_parameters}
+# Define parameters for each cortical column
+# Coordinates determined from manual/interactive inspection of spatial layout
+column.params <- list(
+  COL1 = list(
+    theta = -5,
+    x1 = -9500, x2 = -7500,
+    y1 = -14300, y2 = -12800
+  ),
+  COL2 = list(
+    theta = -7,
+    x1 = -7000, x2 = -5000,
+    y1 = -14600, y2 = -13050
+  ),
+  COL3 = list(
+    theta = -38,
+    x1 = -125, x2 = 1045,
+    y1 = -7000, y2 = -5650
+  )
+)
+```
+
+```{r subset_columns}
+# Subset spatial data to individual cortical columns
+# Matches the original workflow: rotate -> build FOV with rotated X/Y -> Crop(coords="plot") -> subset by returned cells
+
+objs.col <- list()
+
+# Pull fixed XY once
+coords <- as.matrix(obj[[]][, c("X", "Y")])
+stopifnot(identical(rownames(coords), colnames(obj)))
+
+for (col.name in names(column.params)) {
+
+  params <- column.params[[col.name]]
+
+  cat(sprintf("\nSubsetting %s (theta=%.1f)...\n", col.name, params$theta))
+
+  # Rotation
+  theta <- params$theta * pi / 180
+  rotation_matrix <- matrix(
+    c(cos(theta), -sin(theta),
+      sin(theta),  cos(theta)),
+    nrow = 2
+  )
+  rotated_coords <- coords %*% rotation_matrix
+
+  # Store rotated coordinates in the object (like original workflow)
+  obj$X_rotated <- rotated_coords[, 1]
+  obj$Y_rotated <- rotated_coords[, 2]
+
+  # Build FOV from rotated coordinates (NO axis swap)
+  cents.df <- data.frame(X = obj$X_rotated, Y = obj$Y_rotated)
+  rownames(cents.df) <- colnames(obj)
+
+  cents <- CreateCentroids(cents.df)
+  fov <- CreateFOV(
+    cents,
+    type  = "centroids",
+    assay = "RNA",
+    key   = Key("FOV", quiet = TRUE)
+  )
+  fov <- fov[Cells(obj)]
+  obj[["FOV"]] <- fov
+
+  # Crop in plot coords (same as original)
+  xlo <- min(params$x1, params$x2); xhi <- max(params$x1, params$x2)
+  ylo <- min(params$y1, params$y2); yhi <- max(params$y1, params$y2)
+
+  column.coords <- Crop(
+    obj[["FOV"]],
+    x = c(xlo, xhi),
+    y = c(ylo, yhi),
+    coords = "plot"
+  )
+
+  sel.cells <- Cells(column.coords)
+
+  # Subset object to selected cells
+  obj.col <- subset(obj, cells = sel.cells)
+  obj.col$region <- col.name
+
+  # Preserve original coordinates (like your loop did)
+  obj.col$X_orig <- obj.col$X
+  obj.col$Y_orig <- obj.col$Y
+
+  # Attach the cropped coordinates as its own FOV (like original COL3 slot)
+  obj.col[[col.name]] <- column.coords[Cells(obj.col)]
+
+  objs.col[[col.name]] <- obj.col
+
+  cat(sprintf("  Selected %d cells\n", ncol(obj.col)))
+}
+
+rm(obj)
+```
+
+```{r plot_individual_columns, fig.width=12, fig.height=4}
+# Visualize individual columns before combining
+for (col.name in names(objs.col)) {
+  p <- ImageDimPlot(objs.col[[col.name]], fov = col.name, cols = "red", size = 2.5) + 
+    NoLegend() +
+    ggtitle(paste0(col.name, " - ", ncol(objs.col[[col.name]]), " cells"))
+  print(p)
+}
+```
+
+```{r align_and_combine_columns}
+# Align columns: scale to common dimensions, position side-by-side
+region.names <- names(objs.col)
+
+# Precompute coords for each region (ALREADY ROTATED from the subsetting step)
+rotated_coords <- list()
+for (region in region.names) {
+  obj_region <- objs.col[[region]]
+
+  # coords from the cropped FOV you stored as obj.col[[col.name]]
+  coords_raw <- obj_region[[region]]$centroids@coords
+
+  # Keep as-is (already rotated)
+  rotated_coords[[region]] <- coords_raw
+}
+
+# Get maximum height and width across all columns
+widths <- sapply(region.names, function(region) {
+  cc <- rotated_coords[[region]]
+  max(cc[, 2]) - min(cc[, 2])
+})
+
+heights <- sapply(region.names, function(region) {
+  cc <- rotated_coords[[region]]
+  max(cc[, 1]) - min(cc[, 1])
+})
+
+max_width <- max(widths)
+max_height <- max(heights)
+
+cat(sprintf("Max width: %.2f, Max height: %.2f\n", max_width, max_height))
+
+# Get union of all genes across regions
+all_genes <- character(0)
+for (region in region.names) {
+  all_genes <- union(all_genes, rownames(objs.col[[region]]))
+}
+cat(sprintf("Total unique genes across regions: %d\n", length(all_genes)))
+
+# Combine counts and coordinates with scaling/alignment only
+counts <- list()
+coords <- data.frame()
+samples <- character(0)
+
+for (region in region.names) {
+
+  obj <- objs.col[[region]]
+
+  # Extract counts
+  ccounts <- GetAssayData(obj, slot = "counts")
+
+  # Pad to include all genes
+  missing_genes <- setdiff(all_genes, rownames(ccounts))
+  if (length(missing_genes) > 0) {
+    zero_matrix <- Matrix::sparseMatrix(
+      i = integer(0), j = integer(0),
+      dims = c(length(missing_genes), ncol(ccounts)),
+      dimnames = list(missing_genes, colnames(ccounts))
+    )
+    ccounts <- rbind(ccounts, zero_matrix)
+  }
+
+  # Reorder to match all_genes
+  ccounts <- ccounts[all_genes, , drop = FALSE]
+
+  cat(sprintf("%s: %d genes -> %d genes (padded)\n",
+              region, nrow(GetAssayData(obj, slot = "counts")), nrow(ccounts)))
+
+  # Use already-rotated coordinates
+  ccoords <- rotated_coords[[region]]
+
+  # Current width/height
+  current_width  <- max(ccoords[, 2]) - min(ccoords[, 2])
+  current_height <- max(ccoords[, 1]) - min(ccoords[, 1])
+
+  # Scale factors (guard against zero)
+  scale_factor_w <- if (current_width  == 0) 1 else max_width  / current_width
+  scale_factor_h <- if (current_height == 0) 1 else max_height / current_height
+
+  # Apply scaling (preserve coord column meanings)
+  ccoords[, 2] <- ccoords[, 2] * scale_factor_w
+  ccoords[, 1] <- ccoords[, 1] * scale_factor_h
+
+  # Shift to origin
+  ccoords[, 2] <- ccoords[, 2] - min(ccoords[, 2])
+  ccoords[, 1] <- ccoords[, 1] - min(ccoords[, 1])
+
+  # Store
+  counts[[region]] <- ccounts
+  coords <- rbind(coords, ccoords)
+  samples <- c(samples, rep(region, ncol(obj)))
+}
+
+merged_counts <- do.call(cbind, counts)
+
+obj.combined <- CreateSeuratObject(counts = merged_counts)
+obj.combined$sample <- samples
+
+cat(sprintf("\nCombined object: %d cells, %d genes\n",
+            ncol(obj.combined), nrow(obj.combined)))
+```
+
+```{r create_combined_fov}
+# Create centroids and FOV for combined object
+cents.df <- data.frame(X = coords[, 1], Y = coords[, 2])
+colnames(cents.df) <- c("X", "Y")
+rownames(cents.df) <- colnames(obj.combined)
+
+cents <- CreateCentroids(cents.df)
+fov <- CreateFOV(
+  cents, 
+  type = "centroids",
+  assay = "RNA",
+  key = Key("COL", quiet = TRUE)
+)
+
+fov <- fov[Cells(obj.combined)]
+obj.combined[["COL"]] <- fov
+```
+
+```{r plot_combined}
+# Visualize combined columns
+ImageDimPlot(obj.combined, fov = "COL", cols = "red", size = 2) + 
+  NoLegend() +
+  ggtitle("Combined Columns - Before QC")
+```
+
+```{r apply_qc_filters}
+# Apply QC filters to combined object
+# Thresholds based on spatial transcriptomics characteristics
+min_features <- 50
+min_counts <- 100
+min_cells_per_gene <- 8
+
+n_cells_before <- ncol(obj.combined)
+n_genes_before <- nrow(obj.combined)
+
+# Filter cells
+cell_mask <- Reduce(intersect, list(
+  WhichCells(obj.combined, expression = nFeature_RNA > min_features),
+  WhichCells(obj.combined, expression = nCount_RNA > min_counts)
+))
+
+# Filter genes
+gene_mask <- rownames(obj.combined)[
+  Matrix::rowSums(obj.combined[["RNA"]]@counts > 0) > min_cells_per_gene
+]
+
+# Apply filters
+obj.combined <- subset(obj.combined, features = gene_mask, cells = cell_mask)
+
+n_cells_after <- ncol(obj.combined)
+n_genes_after <- nrow(obj.combined)
+
+cat(sprintf("\nFiltering:\n"))
+cat(sprintf("  Cells: %d -> %d (%.1f%% retained)\n", 
+            n_cells_before, n_cells_after, 
+            100 * n_cells_after / n_cells_before))
+cat(sprintf("  Genes: %d -> %d (%.1f%% retained)\n",
+            n_genes_before, n_genes_after,
+            100 * n_genes_after / n_genes_before))
+```
+
+```{r plot_filtered}
+# Visualize after filtering
+ImageDimPlot(obj.combined, fov = "COL", cols = "red", size = 2) + 
+  NoLegend() +
+  ggtitle("Combined Columns - After QC")
+```
+
+```{r save_combined}
+# Save combined object
+output.file <- paste0(dir.list$spatial$seurat$processed, "opossum_combined_columns.rds")
+saveRDS(obj.combined, output.file)
+cat(sprintf("\nSaved combined object to %s\n", output.file))
+```
