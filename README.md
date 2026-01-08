@@ -6,7 +6,7 @@ Code for
 *Comparative transcriptomics reveals differences in cortical cell type organization between metatherian and eutherian mammals*.
 **bioRxiv**. [https://doi.org/10.1101/2025.10.03.680397](https://doi.org/10.1101/2025.10.03.680397)
 
-This repository contains the analysis code used to generate all main and supplementary figures in the manuscript, spanning single-nucleus RNA-seq, spatial transcriptomics, and immunofluorescence data.
+This repository contains the code used to process raw data and generate all main and supplementary figures in the manuscript, spanning single-nucleus RNA-seq, spatial transcriptomics, and immunofluorescence data.
 
 ## Status
 
