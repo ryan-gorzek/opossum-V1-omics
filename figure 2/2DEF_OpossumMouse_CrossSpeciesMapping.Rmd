@@ -1,0 +1,150 @@
+---
+title: "Figure 2D-F: Opossum-Mouse Cross-Species Mapping Confusion Matrices"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may need to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(plyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_processed_data}
+# Load processed opossum data
+objs.opossum <- list()
+objs.opossum$Glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+objs.opossum$GABAergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_gabaergic_processed.rds"))
+objs.opossum$Nonneuronal <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_nonneuronal_processed.rds"))
+
+# Load processed mouse data
+objs.mouse <- list()
+objs.mouse$Glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+objs.mouse$GABAergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_gabaergic_processed.rds"))
+objs.mouse$Nonneuronal <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_nonneuronal_processed.rds"))
+```
+
+```{r subsample_and_map}
+# Perform subsampled mapping: 100 cells per subclass, 10 iterations
+classes <- c("Glutamatergic", "GABAergic", "Nonneuronal")
+n.cells <- 100
+n.iterations <- 10
+
+# Generate subsampling iterations for both species
+iteration.list <- list(Opossum = list(), Mouse = list())
+for (cl in classes) {
+  iteration.list$Opossum[[cl]] <- SubsampleObjectMultipleIterations(
+    objs.opossum[[cl]], "subclass", n.cells, n.iterations
+  )
+  iteration.list$Mouse[[cl]] <- SubsampleObjectMultipleIterations(
+    objs.mouse[[cl]], "subclass", n.cells, n.iterations
+  )
+}
+
+# Initialize storage for mapping results
+mapping.data <- list(
+  cell.id = c(),
+  subclass = c(),
+  predicted.subclass = c(),
+  predicted.subclass.score = c()
+)
+mapping.classes <- list(
+  Glutamatergic = mapping.data,
+  GABAergic = mapping.data,
+  Nonneuronal = mapping.data
+)
+mapping.species <- list(Opossum = mapping.classes)
+
+# Perform iterative mapping: opossum → mouse
+for (cl in classes) {
+  for (it in 1:n.iterations) {
+    # Subset to sampled cells
+    obj.opossum <- subset(objs.opossum[[cl]], cells = as.character(iteration.list$Opossum[[cl]][[it]]))
+    obj.mouse <- subset(objs.mouse[[cl]], cells = as.character(iteration.list$Mouse[[cl]][[it]]))
+    
+    # Map opossum to mouse (mouse as reference)
+    obj.mapped <- MapObject(obj.mouse, obj.opossum, idents = "subclass", assay = "SCT")
+    
+    # Store results
+    mapping.species$Opossum[[cl]][["cell.id"]] <- c(
+      mapping.species$Opossum[[cl]][["cell.id"]], 
+      as.character(colnames(obj.mapped))
+    )
+    mapping.species$Opossum[[cl]][["subclass"]] <- c(
+      mapping.species$Opossum[[cl]][["subclass"]], 
+      as.character(obj.mapped$subclass)
+    )
+    mapping.species$Opossum[[cl]][["predicted.subclass"]] <- c(
+      mapping.species$Opossum[[cl]][["predicted.subclass"]], 
+      as.character(obj.mapped$predicted.subclass)
+    )
+    mapping.species$Opossum[[cl]][["predicted.subclass.score"]] <- c(
+      mapping.species$Opossum[[cl]][["predicted.subclass.score"]], 
+      as.numeric(obj.mapped$predicted.subclass.score)
+    )
+  }
+}
+
+# Save mapping results
+saveRDS(mapping.species, paste0(dir.list$fig2$data, "opossum_mouse_subsampled_mapping.rds"))
+```
+
+```{r fig2c_glutamatergic_confusion, fig.width=6, fig.height=7}
+# Figure 2C: Glutamatergic cross-species mapping confusion matrix
+# Shows how opossum IT neuron subclasses map to mouse cortical layer subclasses
+mapping.classes <- mapping.species$Opossum
+
+p <- PlotSubsampledMappedLabelsHeatmap(
+  true.labels = mapping.classes$Glutamatergic$subclass,
+  pred.labels = mapping.classes$Glutamatergic$predicted.subclass,
+  column_levels = c("L2/3", "L4", "L5IT", "L6IT", "L5NP", "L5PT", "L6CT", "L6b"),
+  normalize = "row",
+  ident.order = c("IT_A", "IT_C", "L2/3", "L5IT", 
+                  "L5NP", 
+                  "IT_B", "IT_D", "L4", "L6IT", 
+                  "L5PT", "L6CT", "L6b")
+) + scale_fill_gradient2(low = "white", mid = "red", high = "blue", midpoint = 50)
+
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2D_OpossumMouse-Glutamatergic-Confusion")
+```
+
+```{r fig2d_gabaergic_confusion, fig.width=5, fig.height=6}
+# Figure 2D: GABAergic cross-species mapping confusion matrix
+# Shows mapping between opossum and mouse GABAergic interneuron subclasses
+p <- PlotSubsampledMappedLabelsHeatmap(
+  true.labels = mapping.classes$GABAergic$subclass,
+  pred.labels = mapping.classes$GABAergic$predicted.subclass,
+  column_levels = c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1"),
+  normalize = "row",
+  ident.order = c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")
+) + scale_fill_gradient2(low = "white", mid = "red", high = "blue", midpoint = 50)
+
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2E_OpossumMouse-GABAergic-Confusion")
+```
+
+```{r fig2e_nonneuronal_confusion, fig.width=5, fig.height=6}
+# Figure 2E: Non-neuronal cross-species mapping confusion matrix
+# Shows mapping between opossum and mouse non-neuronal cell types
+p <- PlotSubsampledMappedLabelsHeatmap(
+  true.labels = mapping.classes$Nonneuronal$subclass,
+  pred.labels = mapping.classes$Nonneuronal$predicted.subclass,
+  column_levels = c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC"),
+  normalize = "row",
+  ident.order = c("Astro", "Micro", "OD", "OPC", "Endo", "VLMC")
+) + scale_fill_gradient2(low = "white", mid = "red", high = "blue", midpoint = 50)
+
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2F_OpossumMouse-Nonneuronal-Confusion")
+```

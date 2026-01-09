@@ -1,0 +1,236 @@
+---
+title: "Figure 2Q: IT Subclass Gene Expression Correlations"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may need to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(ggrepel)
+library(Matrix)
+source("config.R")
+```
+
+```{r load_data}
+# Load processed glutamatergic data
+obj.opossum.glut <- readRDS(file.path(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+obj.mouse.glut <- readRDS(file.path(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+
+DefaultAssay(obj.opossum.glut) <- "RNA"
+DefaultAssay(obj.mouse.glut) <- "RNA"
+```
+
+```{r subset_it}
+# Subset to IT neurons
+it.mouse.labels <- c("L2/3", "L4", "L5IT", "L6IT")
+it.opossum.labels <- c("IT_A", "IT_B", "IT_C", "IT_D")
+
+obj.mouse.IT <- subset(obj.mouse.glut, subclass %in% it.mouse.labels)
+obj.opossum.IT <- subset(obj.opossum.glut, subclass %in% it.opossum.labels)
+```
+
+```{r define_hvg_sets}
+# IT-specific HVGs (from IT subsets, species-specific)
+obj.mouse.IT <- FindVariableFeatures(obj.mouse.IT, nfeatures = 3000, verbose = FALSE)
+obj.opossum.IT <- FindVariableFeatures(obj.opossum.IT, nfeatures = 3000, verbose = FALSE)
+
+hvgs.IT.mouse <- VariableFeatures(obj.mouse.IT)
+hvgs.IT.opossum <- VariableFeatures(obj.opossum.IT)
+
+cat("Mouse IT HVGs:", length(hvgs.IT.mouse), "\n")
+cat("Opossum IT HVGs:", length(hvgs.IT.opossum), "\n")
+cat("Overlap:", length(intersect(hvgs.IT.mouse, hvgs.IT.opossum)), "\n")
+```
+
+```{r helper_functions}
+# Compute average expression per group
+AvgExprByGroup <- function(obj, group_col, groups_keep = NULL, 
+                           features = NULL, slot = "data") {
+  md <- obj@meta.data
+  stopifnot(group_col %in% colnames(md))
+  
+  if (!is.null(groups_keep)) {
+    keep_cells <- rownames(md)[md[[group_col]] %in% groups_keep]
+    obj <- obj[, keep_cells]
+    md <- obj@meta.data
+  }
+  
+  mat <- GetAssayData(obj, slot = slot)
+  if (!is.null(features)) {
+    features <- intersect(features, rownames(mat))
+    mat <- mat[features, , drop = FALSE]
+  }
+  
+  groups <- droplevels(factor(md[[group_col]]))
+  G <- Matrix::sparse.model.matrix(~ 0 + groups)
+  colnames(G) <- levels(groups)
+  
+  sums <- mat %*% G
+  n <- Matrix::colSums(G)
+  means <- sweep(sums, 2, n, "/")
+  as.matrix(means)
+}
+
+# Extract upper triangle as tibble
+UpperTriTibble <- function(cor_mat) {
+  nm <- colnames(cor_mat)
+  idx <- which(upper.tri(cor_mat), arr.ind = TRUE)
+  tibble(
+    g1 = nm[idx[, 1]],
+    g2 = nm[idx[, 2]],
+    pair = paste(g1, g2, sep = " / "),
+    r = cor_mat[idx]
+  )
+}
+
+# Compute within-species correlations
+ComputeCorrelations <- function(obj, group_col, groups_keep, features,
+                                scale_genes = FALSE, method = "spearman") {
+  mean_mat <- AvgExprByGroup(obj, group_col, groups_keep, features)
+  
+  if (scale_genes) {
+    mean_mat <- t(scale(t(mean_mat)))
+    mean_mat[is.na(mean_mat)] <- 0
+  }
+  
+  cor_mat <- cor(mean_mat, method = method, use = "pairwise.complete.obs")
+  vec <- UpperTriTibble(cor_mat)
+  
+  list(mean_mat = mean_mat, cor_mat = cor_mat, vec = vec)
+}
+```
+
+```{r run_all_conditions}
+# Use species-specific HVGs (no intersection requirement)
+# Each species uses its own top 3000 IT-specific HVGs
+cat("Mouse IT HVGs:", length(hvgs.IT.mouse), "\n")
+cat("Opossum IT HVGs:", length(hvgs.IT.opossum), "\n")
+cat("Overlap:", length(intersect(hvgs.IT.mouse, hvgs.IT.opossum)), "\n")
+
+# Run conditions with species-specific HVGs
+conditions <- list()
+
+# Condition 1: Species-specific IT HVGs, no scaling
+conditions$IT_noscale <- list(
+  mouse = ComputeCorrelations(obj.mouse.IT, "subclass", it.mouse.labels, 
+                              hvgs.IT.mouse, scale_genes = FALSE),
+  opossum = ComputeCorrelations(obj.opossum.IT, "subclass", it.opossum.labels, 
+                                hvgs.IT.opossum, scale_genes = FALSE),
+  label = "IT HVGs, no scaling"
+)
+
+# Condition 2: Species-specific IT HVGs, within-species scaling
+conditions$IT_scaled <- list(
+  mouse = ComputeCorrelations(obj.mouse.IT, "subclass", it.mouse.labels, 
+                              hvgs.IT.mouse, scale_genes = TRUE),
+  opossum = ComputeCorrelations(obj.opossum.IT, "subclass", it.opossum.labels, 
+                                hvgs.IT.opossum, scale_genes = TRUE),
+  label = "IT HVGs, scaled"
+)
+```
+
+```{r build_comparison_data}
+# IT subclass mapping
+it.mapping <- c("IT_A" = "L2/3", "IT_B" = "L4", "IT_C" = "L5IT", "IT_D" = "L6IT")
+position.map <- c("L2/3" = "A", "L4" = "B", "L5IT" = "C", "L6IT" = "D",
+                  "IT_A" = "A", "IT_B" = "B", "IT_C" = "C", "IT_D" = "D")
+
+# Pair labels for display
+pair.labels <- c(
+  "A/B" = "L2/3–L4 | IT_A–IT_B",
+  "A/C" = "L2/3–L5IT | IT_A–IT_C",
+  "A/D" = "L2/3–L6IT | IT_A–IT_D",
+  "B/C" = "L4–L5IT | IT_B–IT_C",
+  "B/D" = "L4–L6IT | IT_B–IT_D",
+  "C/D" = "L5IT–L6IT | IT_C–IT_D"
+)
+
+#' Build comparison dataframe for a condition
+BuildConditionDF <- function(cond, cond_name) {
+  # Map to positional pairs
+  mouse_vec <- cond$mouse$vec %>%
+    mutate(pos1 = position.map[g1], pos2 = position.map[g2]) %>%
+    filter(!is.na(pos1) & !is.na(pos2)) %>%
+    mutate(pair_pos = paste0(pmin(pos1, pos2), "/", pmax(pos1, pos2))) %>%
+    dplyr::select(pair_pos, r_mouse = r)
+  
+  opossum_vec <- cond$opossum$vec %>%
+    mutate(pos1 = position.map[g1], pos2 = position.map[g2]) %>%
+    filter(!is.na(pos1) & !is.na(pos2)) %>%
+    mutate(pair_pos = paste0(pmin(pos1, pos2), "/", pmax(pos1, pos2))) %>%
+    dplyr::select(pair_pos, r_opossum = r)
+  
+  inner_join(mouse_vec, opossum_vec, by = "pair_pos") %>%
+    mutate(
+      condition = cond_name,
+      pair_label = pair.labels[pair_pos]
+    )
+}
+
+# Build combined dataframe
+df.all <- bind_rows(
+  BuildConditionDF(conditions$IT_noscale, "IT HVGs\nNo scaling"),
+  BuildConditionDF(conditions$IT_scaled, "IT HVGs\nScaled")
+)
+
+# Set factor order
+df.all$condition <- factor(df.all$condition, levels = c(
+  "IT HVGs\nNo scaling", "IT HVGs\nScaled"
+))
+```
+
+```{r print_summary_table}
+# Summary statistics per condition
+df.summary <- df.all %>%
+  group_by(condition) %>%
+  summarise(
+    mean_mouse = mean(r_mouse),
+    mean_opossum = mean(r_opossum),
+    mean_diff = mean(r_opossum - r_mouse),
+    max_diff = max(abs(r_opossum - r_mouse)),
+    .groups = "drop"
+  )
+
+print(df.summary)
+```
+
+```{r print_detailed_table}
+# Full pairwise results
+df.all %>%
+  dplyr::select(condition, pair_label, r_mouse, r_opossum) %>%
+  mutate(
+    diff = r_opossum - r_mouse,
+    across(where(is.numeric), ~round(.x, 3))
+  ) %>%
+  arrange(condition, pair_label) %>%
+  print(n = 12)
+```
+
+```{r main_figure_plot, fig.width=5, fig.height=4.5}
+# Figure 2P: Use IT-specific HVGs, no additional scaling (log-normalized data)
+df.main <- df.all %>% filter(condition == "IT HVGs\nNo scaling")
+
+p <- ggplot(df.main, aes(x = r_mouse, y = r_opossum)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  geom_point(size = 3) +
+  geom_text_repel(aes(label = pair_label), size = 3, max.overlaps = Inf) +
+  coord_equal() +
+  labs(
+    x = "Mouse IT subclass-pair correlation",
+    y = "Opossum IT subclass-pair correlation"
+  ) +
+  theme_classic(base_size = 12) + xlim(0.85, 0.95) + ylim(0.85, 0.95)
+
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2P_OpossumMouse-ITHVGCorrelation-Scatter")
+```

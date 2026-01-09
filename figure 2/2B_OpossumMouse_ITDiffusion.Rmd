@@ -1,0 +1,196 @@
+---
+title: "Figure 2B: IT Continuum Diffusion Embedding"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may need to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(destiny)
+library(comparatome)
+source("config.R")
+```
+
+```{r params}
+label_col <- "subclass"
+
+mouse_labels   <- c("L2/3", "L4", "L5IT", "L6IT")
+opossum_labels <- c("IT_A", "IT_B", "IT_C", "IT_D")
+
+# Shared axis labels for cross-species comparison
+axis_levels <- c("L2/3", "L4", "L5IT", "L6IT")
+
+axis_map <- list(
+  mouse   = setNames(axis_levels, mouse_labels),
+  opossum = setNames(axis_levels, opossum_labels)
+)
+
+# Diffusion map parameters
+dims <- 1:30
+k    <- 30
+```
+
+```{r load_data}
+obj.mouse <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+obj.opossum <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+```
+
+```{r colors}
+cols_axis <- NULL
+if (exists("get_colors")) {
+  cl <- get_colors()
+  if (all(axis_levels %in% names(cl))) cols_axis <- unname(cl[axis_levels])
+}
+```
+
+```{r subset_it}
+SubsetAndRelabelAxis <- function(obj, species_name, label_col, axis_map, axis_levels) {
+  map <- axis_map[[species_name]]
+  labs <- as.character(obj[[label_col, drop = TRUE]])
+  keep <- labs %in% names(map)
+  obj <- subset(obj, cells = colnames(obj)[keep])
+  
+  labs <- as.character(obj[[label_col, drop = TRUE]])
+  obj[["axis_label"]] <- factor(unname(map[labs]), levels = axis_levels)
+  obj[["species"]] <- species_name
+  obj
+}
+
+obj.mouse.IT   <- SubsetAndRelabelAxis(obj.mouse, "mouse", label_col, axis_map, axis_levels)
+obj.opossum.IT <- SubsetAndRelabelAxis(obj.opossum, "opossum", label_col, axis_map, axis_levels)
+
+table(obj.mouse.IT[["axis_label", drop = TRUE]])
+table(obj.opossum.IT[["axis_label", drop = TRUE]])
+```
+
+```{r run_pca}
+obj.mouse.IT <- NormalizeAndPCA(obj.mouse.IT)
+obj.opossum.IT <- NormalizeAndPCA(obj.opossum.IT)
+```
+
+```{r compute_diffusion}
+RunDiffusion <- function(obj, dims = 1:30, k = 30) {
+  X <- Embeddings(obj, "pca")[, dims, drop = FALSE]
+  dm <- DiffusionMap(as.matrix(X), k = k)
+  coords <- eigenvectors(dm)
+  colnames(coords) <- paste0("DC", seq_len(ncol(coords)))
+  coords
+}
+
+coords_mouse <- RunDiffusion(obj.mouse.IT, dims = dims, k = k)
+coords_opos  <- RunDiffusion(obj.opossum.IT, dims = dims, k = k)
+
+df_mouse <- data.frame(
+  cell       = rownames(coords_mouse),
+  DC1        = coords_mouse[, "DC1"],
+  DC2        = coords_mouse[, "DC2"],
+  axis_label = obj.mouse.IT[["axis_label", drop = TRUE]],
+  species    = "mouse"
+)
+
+df_opos <- data.frame(
+  cell       = rownames(coords_opos),
+  DC1        = coords_opos[, "DC1"],
+  DC2        = coords_opos[, "DC2"],
+  axis_label = obj.opossum.IT[["axis_label", drop = TRUE]],
+  species    = "opossum"
+)
+
+df_all <- bind_rows(df_mouse, df_opos)
+```
+
+```{r figure_2b, fig.width=10, fig.height=5}
+# Normalize DC1 within species, flip axes for consistent orientation
+dfp <- df_all %>%
+  group_by(species) %>%
+  mutate(
+    DC1n = -rescale(DC1, to = c(0, 1)),
+    DC2n = -DC2
+  ) %>%
+  ungroup()
+
+dfp$axis_label <- factor(dfp$axis_label, levels = axis_levels)
+
+# Subclass centroids
+centroids <- dfp %>%
+  group_by(species, axis_label) %>%
+  summarize(
+    DC1n = mean(DC1n, na.rm = TRUE),
+    DC2n = mean(DC2n, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Binned trajectory for loess spine
+nbins <- 25
+traj <- dfp %>%
+  group_by(species) %>%
+  mutate(bin = cut(DC1n, breaks = nbins, include.lowest = TRUE)) %>%
+  group_by(species, bin) %>%
+  summarize(
+    DC1n = mean(DC1n, na.rm = TRUE),
+    DC2n = mean(DC2n, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(species, DC1n)
+
+# Build plot
+p <- ggplot(dfp, aes(x = DC1n, y = DC2n, color = axis_label)) +
+  geom_point(size = 2, alpha = 0.5) +
+  geom_smooth(
+    data = traj,
+    aes(x = DC1n, y = DC2n),
+    inherit.aes = FALSE,
+    method = "loess",
+    span = 0.25,
+    se = FALSE,
+    color = "black",
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = centroids,
+    aes(x = DC1n, y = DC2n, fill = axis_label),
+    inherit.aes = FALSE,
+    shape = 21,
+    size = 5,
+    color = "black",
+    stroke = 0.6
+  ) +
+  facet_wrap(~species, nrow = 1) +
+  theme_classic() +
+  labs(
+    x = "DC1 (normalized)",
+    y = "DC2",
+    color = "Layer"
+  ) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "black"),
+    strip.text = element_text(color = "black"),
+    legend.key.height = unit(0.5, "lines")
+  )
+
+# Set aspect ratio based on data range
+xr <- range(dfp$DC1n, na.rm = TRUE)
+yr <- range(dfp$DC2n, na.rm = TRUE)
+ratio <- diff(xr) / diff(yr)
+p <- p + coord_fixed(ratio = ratio * 1.3, expand = TRUE)
+
+if (!is.null(cols_axis)) {
+  p <- p +
+    scale_color_manual(values = cols_axis, drop = FALSE) +
+    scale_fill_manual(values = cols_axis, drop = FALSE)
+} else {
+  p <- p + guides(fill = "none")
+}
+
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2B_OpossumMouse-Diffusion-Components")
+```
