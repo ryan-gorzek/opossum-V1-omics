@@ -1,0 +1,65 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' class='svglite' width='526.60pt' height='325.67pt' viewBox='0 0 526.60 325.67'>
+<defs>
+  <style type='text/css'><![CDATA[
+    .svglite line, .svglite polyline, .svglite polygon, .svglite path, .svglite rect, .svglite circle {
+      fill: none;
+      stroke: #000000;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-miterlimit: 10.00;
+    }
+    .svglite text {
+      white-space: pre;
+    }
+  ]]></style>
+</defs>
+<rect width='100%' height='100%' style='stroke: none; fill: #FFFFFF;'/>
+<defs>
+  <clipPath id='cpMC4wMHw1MjYuNjB8MC4wMHwzMjUuNjc='>
+    <rect x='0.00' y='0.00' width='526.60' height='325.67' />
+  </clipPath>
+</defs>
+<g clip-path='url(#cpMC4wMHw1MjYuNjB8MC4wMHwzMjUuNjc=)'>
+<rect x='0.00' y='0.00' width='526.60' height='325.67' style='stroke-width: 1.07; stroke: #FFFFFF; fill: #FFFFFF;' />
+</g>
+<defs>
+  <clipPath id='cpMjEuMTV8NTIxLjEzfDIzLjE4fDI5NC4xOA=='>
+    <rect x='21.15' y='23.18' width='499.97' height='271.00' />
+  </clipPath>
+</defs>
+<g clip-path='url(#cpMjEuMTV8NTIxLjEzfDIzLjE4fDI5NC4xOA==)'>
+<rect x='21.15' y='23.18' width='499.97' height='271.00' style='stroke-width: 1.07; stroke: none; fill: #EBEBEB;' />
+<rect x='43.88' y='248.28' width='332.82' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<rect x='43.88' y='29.73' width='380.01' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<rect x='43.88' y='73.44' width='364.88' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<rect x='43.88' y='160.86' width='352.35' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<rect x='43.88' y='117.15' width='352.35' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<rect x='43.88' y='204.57' width='341.62' height='39.34' style='stroke-width: 1.07; stroke: #FFFFFF; stroke-linecap: butt; stroke-linejoin: miter; fill: #00AEEF;' />
+<text x='55.24' y='271.52' style='font-size: 9.96px; font-family: "Arial";' textLength='201.91px' lengthAdjust='spacingAndGlyphs'>cardiac muscle cell contraction (GO:0086003)</text>
+<text x='55.24' y='45.80' style='font-size: 9.96px; font-family: "Arial";' textLength='161.02px' lengthAdjust='spacingAndGlyphs'>regulation of hepatocyte proliferation</text>
+<text x='55.24' y='60.14' style='font-size: 9.96px; font-family: "Arial";' textLength='63.63px' lengthAdjust='spacingAndGlyphs'>(GO:2000345)</text>
+<text x='55.24' y='96.68' style='font-size: 9.96px; font-family: "Arial";' textLength='157.13px' lengthAdjust='spacingAndGlyphs'>dendrite arborization (GO:0140059)</text>
+<text x='55.24' y='176.93' style='font-size: 9.96px; font-family: "Arial";' textLength='179.26px' lengthAdjust='spacingAndGlyphs'>negative regulation of long-term synaptic</text>
+<text x='55.24' y='191.27' style='font-size: 9.96px; font-family: "Arial";' textLength='117.86px' lengthAdjust='spacingAndGlyphs'>potentiation (GO:1900272)</text>
+<text x='55.24' y='133.22' style='font-size: 9.96px; font-family: "Arial";' textLength='149.37px' lengthAdjust='spacingAndGlyphs'>regulation of potassium ion import</text>
+<text x='55.24' y='147.56' style='font-size: 9.96px; font-family: "Arial";' textLength='63.63px' lengthAdjust='spacingAndGlyphs'>(GO:1903286)</text>
+<text x='55.24' y='220.64' style='font-size: 9.96px; font-family: "Arial";' textLength='153.27px' lengthAdjust='spacingAndGlyphs'>sympathetic ganglion development</text>
+<text x='55.24' y='234.98' style='font-size: 9.96px; font-family: "Arial";' textLength='63.63px' lengthAdjust='spacingAndGlyphs'>(GO:0061549)</text>
+</g>
+<g clip-path='url(#cpMC4wMHw1MjYuNjB8MC4wMHwzMjUuNjc=)'>
+<polyline points='43.88,296.92 43.88,294.18 ' style='stroke-width: 1.07; stroke: #333333; stroke-linecap: butt;' />
+<polyline points='157.51,296.92 157.51,294.18 ' style='stroke-width: 1.07; stroke: #333333; stroke-linecap: butt;' />
+<polyline points='271.14,296.92 271.14,294.18 ' style='stroke-width: 1.07; stroke: #333333; stroke-linecap: butt;' />
+<polyline points='384.77,296.92 384.77,294.18 ' style='stroke-width: 1.07; stroke: #333333; stroke-linecap: butt;' />
+<polyline points='498.40,296.92 498.40,294.18 ' style='stroke-width: 1.07; stroke: #333333; stroke-linecap: butt;' />
+<text x='43.88' y='305.41' text-anchor='middle' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.90px' lengthAdjust='spacingAndGlyphs'>0</text>
+<text x='157.51' y='305.41' text-anchor='middle' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.90px' lengthAdjust='spacingAndGlyphs'>2</text>
+<text x='271.14' y='305.41' text-anchor='middle' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.90px' lengthAdjust='spacingAndGlyphs'>4</text>
+<text x='384.77' y='305.41' text-anchor='middle' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.90px' lengthAdjust='spacingAndGlyphs'>6</text>
+<text x='498.40' y='305.41' text-anchor='middle' style='font-size: 8.80px;fill: #4D4D4D; font-family: "Arial";' textLength='4.90px' lengthAdjust='spacingAndGlyphs'>8</text>
+<text x='271.14' y='317.88' text-anchor='middle' style='font-size: 11.00px; font-family: "Arial";' textLength='158.39px' lengthAdjust='spacingAndGlyphs'>Enrichment log(combined score)</text>
+<text transform='translate(13.36,158.68) rotate(-90)' text-anchor='middle' style='font-size: 11.00px; font-family: "Arial";' textLength='24.45px' lengthAdjust='spacingAndGlyphs'>Term</text>
+<text x='271.14' y='14.93' text-anchor='middle' style='font-size: 13.20px; font-family: "Arial";' textLength='175.99px' lengthAdjust='spacingAndGlyphs'>GO_Biological_Process_2021</text>
+</g>
+</svg>

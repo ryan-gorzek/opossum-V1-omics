@@ -1,0 +1,496 @@
+---
+title: "Figure 2K-M: Cross-Species WGCNA Module Preservation"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(WGCNA)
+library(hdWGCNA)
+library(enrichR)
+library(ggplot2)
+library(comparatome)
+source("config.R")
+```
+
+# Mouse IT Neuron WGCNA
+
+```{r load_mouse_glutamatergic}
+# Load processed mouse glutamatergic data and subset to IT neurons
+obj.mouse.glut <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+DefaultAssay(obj.mouse.glut) <- "RNA"
+Idents(obj.mouse.glut) <- "subclass"
+obj.mouse.IT <- subset(obj.mouse.glut, idents = c("L2/3", "L4", "L5IT", "L6IT"))
+rm(obj.mouse.glut)
+```
+
+```{r mouse_setup_wgcna}
+# Setup hdWGCNA experiment
+obj.mouse.IT <- SetupForWGCNA(
+  obj.mouse.IT,
+  gene_select = "fraction",
+  fraction = 0.05,
+  wgcna_name = "test"
+)
+```
+
+```{r mouse_metacells}
+# Construct metacells for robust co-expression estimation
+obj.mouse.IT <- MetacellsByGroups(
+  seurat_obj = obj.mouse.IT,
+  group.by = c("subclass", "sample"),
+  assay = "RNA",
+  reduction = "pca",
+  k = 25,
+  max_shared = 10,
+  ident.group = "subclass"
+)
+
+obj.mouse.IT <- NormalizeMetacells(obj.mouse.IT)
+```
+
+```{r mouse_datexpr}
+# Set expression matrix for network construction
+obj.mouse.IT <- SetDatExpr(
+  obj.mouse.IT,
+  group_name = c("L2/3", "L4", "L5IT", "L6IT"),
+  group.by = "subclass",
+  assay = "RNA",
+  slot = "data"
+)
+```
+
+```{r mouse_soft_power}
+# Determine optimal soft-thresholding power
+obj.mouse.IT <- TestSoftPowers(obj.mouse.IT, networkType = "signed")
+plot_list <- PlotSoftPowers(obj.mouse.IT)
+wrap_plots(plot_list, ncol = 2)
+```
+
+```{r mouse_construct_network}
+# Construct co-expression network
+obj.mouse.IT <- ConstructNetwork(
+  obj.mouse.IT,
+  tom_name = "IT-MOUSE",
+  overwrite_tom = TRUE
+)
+
+PlotDendrogram(obj.mouse.IT, main = "Mouse IT hdWGCNA Dendrogram")
+```
+
+```{r mouse_module_eigengenes}
+# Compute module eigengenes and connectivity
+obj.mouse.IT <- ScaleData(obj.mouse.IT, features = VariableFeatures(obj.mouse.IT))
+obj.mouse.IT <- ModuleEigengenes(obj.mouse.IT, group.by.vars = "sample")
+obj.mouse.IT <- ModuleConnectivity(
+  obj.mouse.IT,
+  group.by = "subclass",
+  group_name = c("L2/3", "L4", "L5IT", "L6IT")
+)
+
+# Rename modules with EXC prefix
+obj.mouse.IT <- ResetModuleNames(obj.mouse.IT, new_name = "EXC-M")
+```
+
+```{r mouse_enrichr}
+# GO enrichment analysis
+dbs <- c("GO_Biological_Process_2021", "GO_Cellular_Component_2021", "GO_Molecular_Function_2021")
+obj.mouse.IT <- RunEnrichr(
+  obj.mouse.IT,
+  dbs = dbs,
+  max_genes = 100,
+  wait_time = 5
+)
+```
+
+```{r mouse_radar_plot, fig.height=5, fig.width=10}
+# Module specificity across mouse IT subclasses
+ModuleRadarPlot(
+  obj.mouse.IT,
+  group.by = "subclass",
+  barcodes = rownames(obj.mouse.IT@meta.data),
+  axis.label.size = 2,
+  grid.label.size = 2
+)
+```
+
+# Opossum IT Neuron WGCNA
+
+```{r load_opossum_glutamatergic}
+# Load processed opossum glutamatergic data and subset to IT neurons
+obj.opossum.glut <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+DefaultAssay(obj.opossum.glut) <- "RNA"
+Idents(obj.opossum.glut) <- "subclass"
+obj.opossum.IT <- subset(obj.opossum.glut, idents = c("IT_A", "IT_B", "IT_C", "IT_D"))
+rm(obj.opossum.glut)
+```
+
+```{r opossum_setup_wgcna}
+# Setup hdWGCNA experiment
+obj.opossum.IT <- SetupForWGCNA(
+  obj.opossum.IT,
+  gene_select = "fraction",
+  fraction = 0.05,
+  wgcna_name = "test"
+)
+```
+
+```{r opossum_metacells}
+# Construct metacells
+obj.opossum.IT <- MetacellsByGroups(
+  seurat_obj = obj.opossum.IT,
+  group.by = c("subclass", "sample"),
+  assay = "RNA",
+  reduction = "pca",
+  k = 25,
+  max_shared = 10,
+  ident.group = "subclass"
+)
+
+obj.opossum.IT <- NormalizeMetacells(obj.opossum.IT)
+```
+
+```{r opossum_datexpr}
+# Set expression matrix for network construction
+obj.opossum.IT <- SetDatExpr(
+  obj.opossum.IT,
+  group_name = c("IT_A", "IT_B", "IT_C", "IT_D"),
+  group.by = "subclass",
+  assay = "RNA",
+  slot = "data"
+)
+```
+
+```{r opossum_soft_power}
+# Determine optimal soft-thresholding power
+obj.opossum.IT <- TestSoftPowers(obj.opossum.IT, networkType = "signed")
+plot_list <- PlotSoftPowers(obj.opossum.IT)
+wrap_plots(plot_list, ncol = 2)
+```
+
+```{r opossum_construct_network}
+# Construct co-expression network
+obj.opossum.IT <- ConstructNetwork(
+  obj.opossum.IT,
+  tom_name = "IT-OPOSSUM",
+  overwrite_tom = TRUE
+)
+
+PlotDendrogram(obj.opossum.IT, main = "Opossum IT hdWGCNA Dendrogram")
+```
+
+```{r opossum_module_eigengenes}
+# Compute module eigengenes and connectivity
+obj.opossum.IT <- ScaleData(obj.opossum.IT, features = VariableFeatures(obj.opossum.IT))
+obj.opossum.IT <- ModuleEigengenes(obj.opossum.IT, group.by.vars = "sample")
+obj.opossum.IT <- ModuleConnectivity(
+  obj.opossum.IT,
+  group.by = "subclass",
+  group_name = c("IT_A", "IT_B", "IT_C", "IT_D")
+)
+
+# Rename modules with IT prefix
+obj.opossum.IT <- ResetModuleNames(obj.opossum.IT, new_name = "IT-M")
+```
+
+```{r opossum_enrichr}
+# GO enrichment analysis
+obj.opossum.IT <- RunEnrichr(
+  obj.opossum.IT,
+  dbs = dbs,
+  max_genes = 100,
+  wait_time = 5
+)
+```
+
+```{r opossum_radar_plot, fig.height=5, fig.width=10}
+# Module specificity across opossum IT subclasses
+ModuleRadarPlot(
+  obj.opossum.IT,
+  group.by = "subclass",
+  barcodes = rownames(obj.opossum.IT@meta.data),
+  axis.label.size = 2,
+  grid.label.size = 2
+)
+```
+
+```{r save_wgcna_intermediates}
+# Save WGCNA objects as intermediates
+saveRDS(obj.mouse.IT, paste0(dir.list$fig2$data, "mouse_v1_it_wgcna.rds"))
+saveRDS(obj.opossum.IT, paste0(dir.list$fig2$data, "opossum_v1_it_wgcna.rds"))
+```
+
+```{r read_wgcna_intermediates}
+# Read intermediate WGCNA objects
+obj.mouse.IT <- readRDS(paste0(dir.list$fig2$data, "mouse_v1_it_wgcna.rds"))
+obj.opossum.IT <- readRDS(paste0(dir.list$fig2$data, "opossum_v1_it_wgcna.rds"))
+```
+
+# Cross-Species Module Preservation
+
+```{r subset_shared_genes}
+# Subset to shared orthologous genes for cross-species comparison
+shared.genes <- intersect(rownames(obj.mouse.IT), rownames(obj.opossum.IT))
+obj.mouse.IT <- obj.mouse.IT[shared.genes, ]
+obj.opossum.IT <- obj.opossum.IT[shared.genes, ]
+```
+
+```{r project_modules}
+# Project mouse modules onto opossum IT neurons
+obj.opossum.IT.Proj <- ProjectModules(
+  obj.opossum.IT,
+  seurat_ref = obj.mouse.IT,
+  group.by.vars = "sample",
+  wgcna_name_proj = "IT"
+)
+
+# Compute module expression scores
+obj.opossum.IT.Proj <- ModuleExprScore(
+  obj.opossum.IT.Proj,
+  n_genes = 25,
+  method = "Seurat"
+)
+```
+
+```{r projected_module_feature_plots, fig.height=5, fig.width=10}
+# Visualize projected module scores in opossum
+plot_list <- ModuleFeaturePlot(
+  obj.opossum.IT.Proj,
+  features = "scores",
+  order = "shuffle"
+)
+wrap_plots(plot_list, ncol = 3)
+```
+
+```{r compare_radar_plots, fig.height=5, fig.width=10}
+# Compare module specificity patterns between species
+
+# Mouse IT modules
+obj.mouse.IT$subclass <- factor(obj.mouse.IT$subclass, 
+                                levels = c("L2/3", "L4", "L5IT", "L6IT"))
+p_mouse <- ModuleRadarPlot(
+  obj.mouse.IT,
+  group.by = "subclass",
+  barcodes = rownames(obj.mouse.IT@meta.data),
+  axis.label.size = 4,
+  grid.label.size = 4
+)
+print(p_mouse)
+SavePNGandSVG(p_mouse, dir.list$fig2$plots, "2M_Mouse-ITWGCNAModule-Radar")
+
+# Projected modules in opossum
+obj.opossum.IT.Proj$subclass <- factor(obj.opossum.IT.Proj$subclass,
+                                       levels = c("IT_A", "IT_B", "IT_C", "IT_D"))
+p_opossum <- ModuleRadarPlot(
+  obj.opossum.IT.Proj,
+  group.by = "subclass",
+  barcodes = rownames(obj.opossum.IT.Proj@meta.data),
+  axis.label.size = 4,
+  grid.label.size = 4
+)
+print(p_opossum)
+SavePNGandSVG(p_opossum, dir.list$fig2$plots, "2M_Opossum-ITWGCNAModule-Radar")
+```
+
+```{r compute_preservation}
+# Compute module preservation statistics
+obj.opossum.IT.Proj <- SetDatExpr(
+  obj.opossum.IT.Proj,
+  group_name = c("IT_A", "IT_B", "IT_C", "IT_D"),
+  group.by = "subclass",
+  use_metacells = FALSE
+)
+
+obj.opossum.IT.Proj <- ModulePreservation(
+  obj.opossum.IT.Proj,
+  seurat_ref = obj.mouse.IT,
+  name = "IT",
+  n_permutations = 100,
+  verbose = 3
+)
+```
+
+```{r fig2k_preservation_scatter}
+# Figure 2K: Module preservation scatter plot
+# Zsummary > 10: strong preservation; > 2: weak preservation
+# Originally 500 permutations, run with 100 here (might look slightly different)
+plot_list <- PlotModulePreservation(
+  obj.opossum.IT.Proj,
+  name = "IT",
+  statistics = "summary"
+)
+
+print(plot_list$Zsummary.pres)
+SavePNGandSVG(plot_list$Zsummary.pres, dir.list$fig2$plots,
+              "2L_OpossumMouse-ITWGCNAPreservation-Scatter")
+```
+
+```{r all_preservation_statistics, fig.height=8, fig.width=16}
+# Comprehensive preservation statistics
+plot_list_all <- PlotModulePreservation(
+  obj.opossum.IT.Proj,
+  name = "IT",
+  statistics = "all",
+  plot_labels = FALSE
+)
+wrap_plots(plot_list_all, ncol = 6)
+```
+
+```{r setup_top_modules}
+# Configure visualization for top preserved modules: M4, M7, M10
+modules <- GetModules(obj.mouse.IT)
+mods <- levels(modules$module)
+mods <- mods[mods %in% c("EXC-M4", "EXC-M7", "EXC-M10")]
+
+# Set module colors
+modules$color[modules$module == "EXC-M4"] <- "#2BB673"
+modules$color[modules$module == "EXC-M7"] <- "#00AEEF"
+modules$color[modules$module == "EXC-M10"] <- "#939598"
+obj.mouse.IT@misc[["test"]]$wgcna_modules <- modules
+```
+
+```{r fig2m_network_plots}
+# Figure 2M: Hub gene network plots for top preserved modules
+# PNG
+png(file.path(dir.list$fig2$plots, "2N_OpossumMouse-ITWGCNA-ModuleNetworks.png"), 
+    width = 5, height = 5, units = "in", res = 300)
+HubGeneNetworkPlot(obj.mouse.IT, n_hubs = 10, n_other = 20, edge_prop = 0.75, mods = mods)
+dev.off()
+# SVG
+svg(file.path(dir.list$fig2$plots, "2N_OpossumMouse-ITWGCNA-ModuleNetworks.svg"),
+    width = 5, height = 5)
+HubGeneNetworkPlot(obj.mouse.IT, n_hubs = 10, n_other = 20, edge_prop = 0.75, mods = mods)
+dev.off()
+```
+
+```{r run_enrichr}
+# Check available databases
+dbs <- listEnrichrDbs()
+
+# Run enrichment on module genes
+obj.mouse.IT <- RunEnrichr(
+  obj.mouse.IT,
+  dbs = "GO_Biological_Process_2021",
+  max_genes = 100  # top hub genes per module
+)
+
+# Now the table exists
+enrichr_df <- GetEnrichrTable(obj.mouse.IT)
+```
+
+```{r define_enrichr_barplot}
+# Custom function for GO enrichment bar plots
+EnrichrBarPlotCustom <- function(seurat_obj, n_terms = 25, logscale = FALSE,
+                                  plot_bar_color = NULL, plot_text_color = NULL,
+                                  wgcna_name = NULL) {
+  if (is.null(wgcna_name)) {
+    wgcna_name <- seurat_obj@misc$active_wgcna
+  }
+  
+  modules <- GetModules(seurat_obj, wgcna_name)
+  mods <- levels(modules$module)
+  mods <- mods[mods != "grey"]
+  
+  enrichr_df <- GetEnrichrTable(seurat_obj, wgcna_name)
+  
+  wrapText <- function(x, len) {
+    sapply(x, function(y) paste(strwrap(y, len), collapse = "\n"), USE.NAMES = FALSE)
+  }
+  
+  plot_list <- list()
+  
+  for (cur_mod in mods) {
+    plot_list[[cur_mod]] <- list()
+    cur_terms <- subset(enrichr_df, module == cur_mod)
+    
+    cur_color <- modules %>%
+      subset(module == cur_mod) %>%
+      .$color %>%
+      unique %>%
+      as.character
+    
+    if (!is.null(plot_bar_color)) cur_color <- plot_bar_color
+    if (nrow(cur_terms) == 0) next
+    
+    cur_terms$wrap <- wrapText(cur_terms$Term, 45)
+    
+    for (cur_db in "GO_Biological_Process_2021") {
+      plot_df <- subset(cur_terms, db == cur_db) %>%
+        top_n(n_terms, wt = Combined.Score)
+      
+      text_color <- if (is.null(plot_text_color)) {
+        if (cur_color == "black") "grey" else "black"
+      } else {
+        plot_text_color
+      }
+      
+      if (logscale) {
+        plot_df$Combined.Score <- log(plot_df$Combined.Score)
+        lab <- "Enrichment log(combined score)"
+        x <- 0.2
+      } else {
+        lab <- "Enrichment (combined score)"
+        x <- 5
+      }
+      
+      plot_list[[cur_mod]][[cur_db]] <- ggplot(
+        plot_df,
+        aes(x = Combined.Score, y = reorder(wrap, Combined.Score))
+      ) +
+        geom_bar(stat = "identity", position = "identity",
+                 color = "white", fill = cur_color) +
+        geom_text(aes(label = wrap), x = x, color = text_color,
+                  size = 3.5, hjust = "left") +
+        ylab("Term") +
+        xlab(lab) +
+        ggtitle(cur_db) +
+        theme(
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          legend.title = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.y = element_blank(),
+          plot.title = element_text(hjust = 0.5)
+        )
+    }
+  }
+  
+  return(plot_list)
+}
+```
+
+```{r fig2l_go_enrichment}
+# Figure 2L: GO enrichment for modules M4, M7, M10
+plot_list <- EnrichrBarPlotCustom(obj.mouse.IT, n_terms = 6, logscale = TRUE)
+
+# M4 enrichment
+p4 <- plot_list$`EXC-M4`$GO_Biological_Process_2021 + xlim(0, 8)
+print(p4)
+SavePNGandSVG(p4, dir.list$fig2$plots, "2N_Mouse-M4GOEnrichment-Bar")
+
+# M7 enrichment
+p7 <- plot_list$`EXC-M7`$GO_Biological_Process_2021 + xlim(0, 8)
+print(p7)
+SavePNGandSVG(p7, dir.list$fig2$plots, "2N_Mouse-M7GOEnrichment-Bar")
+
+# M10 enrichment
+p10 <- plot_list$`EXC-M10`$GO_Biological_Process_2021 + xlim(0, 8)
+print(p10)
+SavePNGandSVG(p10, dir.list$fig2$plots, "2N_Mouse-M10GOEnrichment-Bar")
+```
+
+```{r save_final_objects}
+# Save projected object with preservation statistics
+saveRDS(obj.opossum.IT.Proj, paste0(dir.list$fig2$data, "opossum_v1_it_proj_wgcna.rds"))
+# Save reference object
+saveRDS(obj.mouse.IT, paste0(dir.list$fig2$data, "mouse_v1_it_wgcna.rds"))
+```
