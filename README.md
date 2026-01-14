@@ -42,7 +42,7 @@ Analyses were performed in the following environments:
 
 * **R** ≥ 4.3.0
 
-  * Seurat 4.3.0
+  * Seurat 4.3.0 used for most single-cell analyses
 * **Python** ≥ 3.9
 
   * Used for spatial region selection (preprocessing) and spatial archetype analysis (Figure 3)
