@@ -1,0 +1,211 @@
+---
+title: "Figure 2G-K, O, P: IT Neuron Archetype Analysis and Cross-Species Projection"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(tidyr)
+library(patchwork)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_data}
+# Load processed glutamatergic data
+obj.opossum.glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "opossum_v1_glutamatergic_processed.rds"))
+obj.mouse.glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+```
+
+```{r colors}
+colors_list <- get_colors()
+```
+
+```{r subset_IT}
+# Subset to IT neurons only
+Idents(obj.opossum.glutamatergic) <- "subclass"
+obj.opossum.IT <- subset(obj.opossum.glutamatergic, idents = c("IT_A", "IT_B", "IT_C", "IT_D"))
+
+Idents(obj.mouse.glutamatergic) <- "subclass"
+obj.mouse.IT <- subset(obj.mouse.glutamatergic, idents = c("L2/3", "L4", "L5IT", "L6IT"))
+
+# Add species metadata
+obj.opossum.IT$species <- "Opossum"
+obj.mouse.IT$species <- "Mouse"
+
+# Clean up
+rm(obj.opossum.glutamatergic, obj.mouse.glutamatergic)
+```
+
+# Species-Specific PCA
+
+```{r species_specific_pca}
+# Normalize each species separately and compute PCA
+obj.opossum.IT <- NormalizeAndPCA(obj.opossum.IT)
+obj.mouse.IT <- NormalizeAndPCA(obj.mouse.IT)
+```
+
+```{r plot_species_pca, fig.width=6, fig.height=6}
+# Visualize in species-specific PCA space
+subclasses.mouse <- c("L2/3", "L4", "L5IT", "L6IT")
+Idents(obj.mouse.IT) <- "subclass"
+levels(obj.mouse.IT) <- subclasses.mouse
+p.mouse.pca <- DimPlot(obj.mouse.IT, reduction = "pca", dims = c(1, 2), 
+                        cols = unlist(colors_list[subclasses.mouse]), 
+                        pt.size = 1, label = TRUE, shuffle = TRUE, raster = FALSE) + 
+  NoLegend() + coord_equal() + ggtitle("Mouse IT - Species PCA")
+
+subclasses.opossum <- c("IT_A", "IT_B", "IT_C", "IT_D")
+Idents(obj.opossum.IT) <- "subclass"
+levels(obj.opossum.IT) <- subclasses.opossum
+p.opossum.pca <- DimPlot(obj.opossum.IT, reduction = "pca", dims = c(1, 2),
+                          cols = unlist(colors_list[subclasses.opossum]),
+                          pt.size = 1, label = TRUE, shuffle = TRUE, raster = FALSE) + 
+  NoLegend() + coord_equal() + ggtitle("Opossum IT - Species PCA")
+
+print(p.mouse.pca)
+print(p.opossum.pca)
+```
+
+```{r fig2i_pc_loadings_correlation}
+# Figure 2I: Correlation between PC loadings (gene weights) across species
+p <- PlotPCLoadingsCorrelation(list(obj.opossum.IT, obj.mouse.IT), 
+                               c("Opossum", "Mouse"))
+print(p)
+SavePNGandSVG(p, dir.list$fig2$plots, "2J_OpossumMouse-IT-PC-Loadings-Correlation")
+```
+
+# Balanced Subsampling and Shared Variable Features
+
+```{r subsample_balanced}
+# Subsample to minimum subclass size for balanced representation
+min.cells.opossum <- min(table(obj.opossum.IT$subclass))
+min.cells.mouse <- min(table(obj.mouse.IT$subclass))
+
+obj.opossum.IT.SUB <- SubsampleObject(obj.opossum.IT, "subclass", min.cells.opossum)
+obj.opossum.IT.SUB <- NormalizeAndPCA(obj.opossum.IT.SUB)
+
+obj.mouse.IT.SUB <- SubsampleObject(obj.mouse.IT, "subclass", min.cells.mouse)
+obj.mouse.IT.SUB <- NormalizeAndPCA(obj.mouse.IT.SUB)
+```
+
+```{r shared_variable_features}
+# Identify shared variable features between subsampled objects
+opossum.SUB.VFs <- VariableFeatures(obj.opossum.IT.SUB)
+mouse.SUB.VFs <- VariableFeatures(obj.mouse.IT.SUB)
+shared.SUB.VFs <- intersect(opossum.SUB.VFs, mouse.SUB.VFs)
+cat("Shared variable features:", length(shared.SUB.VFs))
+```
+
+```{r pca_shared_vf}
+# Re-run PCA with shared variable features on subsampled objects
+obj.opossum.IT.SUB.SVF <- NormalizeAndPCA(obj.opossum.IT.SUB, features = shared.SUB.VFs)
+obj.mouse.IT.SUB.SVF <- NormalizeAndPCA(obj.mouse.IT.SUB, features = shared.SUB.VFs)
+```
+
+# Cross-Species PCA Projection
+
+```{r cross_species_projection}
+# Project each species onto the OTHER species' PC space (cross-species)
+# Opossum cells projected onto mouse PC space
+obj.opossum.IT.SUB.SVF.PROJ.ACROSS <- PCAProject(obj.opossum.IT, obj.mouse.IT.SUB.SVF)
+# Opossum cells projected onto mouse PC space
+obj.mouse.IT.SUB.SVF.PROJ.ACROSS <- PCAProject(obj.mouse.IT, obj.opossum.IT.SUB.SVF)
+
+# Within-species projections (all cells onto subsampled reference)
+obj.mouse.IT.SUB.SVF.PROJ.WITHIN <- PCAProject(obj.mouse.IT, obj.mouse.IT.SUB.SVF)
+obj.opossum.IT.SUB.SVF.PROJ.WITHIN <- PCAProject(obj.opossum.IT, obj.opossum.IT.SUB.SVF)
+```
+
+```{r plot_cross_projections, fig.width=8, fig.height=6}
+# Visualize cross-species projections
+# Opossum in mouse PC space
+p.opossum.in.mouse <- DimPlot(obj.opossum.IT.SUB.SVF.PROJ.ACROSS, reduction = "pca", dims = c(1, 2),
+                               group.by = "subclass",
+                               cols = unlist(colors_list[subclasses.opossum]),
+                               pt.size = 0.5, label = TRUE, shuffle = TRUE, raster = FALSE) +
+  NoLegend() + coord_equal() + ggtitle("Opossum IT projected onto Mouse PC space")
+
+# Mouse in opossum PC space
+p.mouse.in.opossum <- DimPlot(obj.mouse.IT.SUB.SVF.PROJ.ACROSS, reduction = "pca", dims = c(1, 2),
+                               group.by = "subclass",
+                               cols = unlist(colors_list[subclasses.mouse]),
+                               pt.size = 0.5, label = TRUE, shuffle = TRUE, raster = FALSE) +
+  NoLegend() + coord_equal() + ggtitle("Mouse IT projected onto Opossum PC space")
+
+print(p.opossum.in.mouse)
+print(p.mouse.in.opossum)
+```
+
+# Export Data for MATLAB ParTI Analysis
+
+```{r export_within_species}
+#### Subsampled Cells for Archetypes  (ParTI recomputes PCA)
+# Mouse
+pc_data <- as.data.frame(Embeddings(obj.mouse.IT.SUB.SVF, reduction = "pca")[, 1:30])
+pc_data$subclass <- obj.mouse.IT.SUB.SVF$subclass
+write.csv(pc_data, paste0(dir.list$fig2$data, "2G_Mouse_SubITPCEmbeddings.csv"), row.names = FALSE)
+
+# Opossum
+pc_data <- as.data.frame(Embeddings(obj.opossum.IT.SUB.SVF, reduction = "pca")[, 1:30])
+pc_data$subclass <- obj.opossum.IT.SUB.SVF$subclass
+write.csv(pc_data, paste0(dir.list$fig2$data, "2H_Opossum_SubITPCEmbeddings.csv"), row.names = FALSE)
+
+#### All Cells for Visualization
+# Mouse within-species projection (all cells onto subsampled mouse reference)
+pc_data <- as.data.frame(Embeddings(obj.mouse.IT.SUB.SVF.PROJ.WITHIN, reduction = "pca")[, 1:30])
+pc_data$subclass <- obj.mouse.IT.SUB.SVF.PROJ.WITHIN$subclass
+write.csv(pc_data, paste0(dir.list$fig2$data, "2G_Mouse_SubProjITPCEmbeddings.csv"), row.names = FALSE)
+
+# Opossum within-species projection (all cells onto subsampled opossum reference)
+pc_data <- as.data.frame(Embeddings(obj.opossum.IT.SUB.SVF.PROJ.WITHIN, reduction = "pca")[, 1:30])
+pc_data$subclass <- obj.opossum.IT.SUB.SVF.PROJ.WITHIN$subclass
+write.csv(pc_data, paste0(dir.list$fig2$data, "2H_Opossum_SubProjITPCEmbeddings.csv"), row.names = FALSE)
+```
+
+```{r export_shared_space_combined}
+# Combined: Both species in subsampled MOUSE PC space
+mouse_pc_data <- as.data.frame(Embeddings(obj.mouse.IT.SUB.SVF.PROJ.WITHIN, reduction = "pca")[, 1:30])
+mouse_pc_data$subclass <- obj.mouse.IT.SUB.SVF.PROJ.WITHIN$subclass
+mouse_pc_data$species <- "Mouse"
+
+opossum_pc_data <- as.data.frame(Embeddings(obj.opossum.IT.SUB.SVF.PROJ.ACROSS, reduction = "pca")[, 1:30])
+opossum_pc_data$subclass <- obj.opossum.IT.SUB.SVF.PROJ.ACROSS$subclass
+opossum_pc_data$species <- "Opossum"
+
+pc_data <- rbind(mouse_pc_data, opossum_pc_data)
+write.csv(pc_data, paste0(dir.list$fig2$data, "2I_OpossumMouse_MouseSubProjITPCEmbeddings.csv"), row.names = FALSE)
+```
+
+# MATLAB Analysis Instructions
+
+**Exported CSV files:**
+
+| File | Description |
+|------|-------------|
+| `2G_Mouse_SubProjITPCEmbeddings.csv` | Mouse IT in species-specific PC space |
+| `2H_Opossum_SubProjITPCEmbeddings.csv` | Opossum IT in species-specific PC space |
+| `2I_OpossumMouse_MouseSubProjITPCEmbeddings.csv` | Both species in MOUSE PC space |
+
+**MATLAB workflow:**
+
+1. Run ParTI to fit tetrahedra to species-specific PC data
+2. Use `2G_Mouse_SubProjITPCEmbeddings.csv` for cross-species visualization in mouse reference frame
+3. Use `2H_Opossum_SubProjITPCEmbeddings.csv` for cross-species visualization in mouse reference frame
+4. Use `2I_OpossumMouse_MouseSubProjITPCEmbeddings.csv` for cross-species visualization in mouse reference frame
+5. Compute silhouette scores and generate heatmaps
+
+**Coordinate transformations:**
+
+- PC plots may require axis transformations for consistent orientation
+- Tetrahedron vertices from `arcOrig` need matching transformation
