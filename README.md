@@ -45,10 +45,10 @@ Analyses were performed in the following environments:
   * Seurat 4.3.0
 * **Python** ≥ 3.9
 
-  * used for spatial region selection (preprocessing) and spatial archetype analysis (figure 3)
+  * Used for spatial region selection (preprocessing) and spatial archetype analysis (Figure 3)
 * **MATLAB** r2023a
 
-  * used for ParTI archetype analysis
+  * Used for ParTI archetype analysis
 
 Some analyses were performed with custom R tools:
 
