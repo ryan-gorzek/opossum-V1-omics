@@ -1,0 +1,262 @@
+---
+title: "Mouse Spatial Section Labeling: Integrate and Label with snRNA-seq"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(dplyr)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_full_spatial}
+# Load complete raw Stereo-seq data
+data.path <- paste0(dir.list$central, "samples/Stereo-seq_Mouse/")
+
+obj.data <- Read10X(data.path, gene.column = 2)
+obj <- CreateSeuratObject(counts = obj.data, project = "Mouse_V1_Stereo-seq")
+obj$species <- "Mouse"
+obj$method <- "Stereo-seq"
+
+cat(sprintf("Full dataset: %d cells, %d genes\n", ncol(obj), nrow(obj)))
+```
+
+```{r load_coordinates}
+# Load spatial coordinates from coords.tsv.gz (CSV format)
+coords <- read.csv(paste0(data.path, "coords.tsv.gz"), header = TRUE, sep = "\t")
+
+# Match barcodes to object and apply transformation
+coords <- coords[match(colnames(obj), coords$barcodes), ]
+obj <- AddMetaData(obj, (coords$X - max(coords$X)) * -1, "X")
+obj <- AddMetaData(obj, (coords$Y - max(coords$Y)) * -1, "Y")
+```
+
+```{r create_fov}
+# Create FOV for spatial visualization
+cents.df <- data.frame(X = obj$X, Y = obj$Y)
+rownames(cents.df) <- colnames(obj)
+
+cents <- CreateCentroids(cents.df)
+fov <- CreateFOV(
+  cents,
+  type = "centroids",
+  assay = "RNA",
+  key = Key("FOV", quiet = TRUE)
+)
+
+obj[["FOV"]] <- fov
+```
+
+```{r load_selected_barcodes}
+# Load selected barcodes for section from Python selection
+section.name <- "MS_SEC1"
+barcodes.file <- paste0(dir.list$central, "spatial/seurat/processed/", "selected_barcodes_", section.name, ".tsv")
+
+selected.barcodes <- read.csv(barcodes.file, header = FALSE, sep = "\t")$V1
+
+cat(sprintf("Selected %d barcodes for %s\n", length(selected.barcodes), section.name))
+```
+
+```{r subset_to_section}
+# Subset to selected section
+obj.section <- subset(obj, cells = as.character(selected.barcodes))
+
+cat(sprintf("Section: %d cells, %d genes\n", ncol(obj.section), nrow(obj.section)))
+```
+
+```{r plot_section_raw, fig.width=10, fig.height=10}
+# Visualize selected section before QC
+ImageDimPlot(obj.section, fov = "FOV", cols = "red", size = 2) +
+  ggtitle(paste0(section.name, " - Before QC"))
+
+ImageFeaturePlot(obj.section, "nCount_RNA", max.cutoff = 1000) +
+  ggtitle("UMI counts per cell")
+```
+
+```{r apply_qc_filters}
+# Apply QC filters to section
+min_features <- 50
+min_counts <- 100
+min_cells_per_gene <- 8
+
+n_cells_before <- ncol(obj.section)
+n_genes_before <- nrow(obj.section)
+
+# Filter cells
+cell_mask <- Reduce(intersect, list(
+  WhichCells(obj.section, expression = nFeature_RNA > min_features),
+  WhichCells(obj.section, expression = nCount_RNA > min_counts)
+))
+
+# Filter genes
+gene_mask <- rownames(obj.section)[
+  Matrix::rowSums(obj.section[["RNA"]]@counts > 0) > min_cells_per_gene
+]
+
+# Apply filters
+obj.section <- subset(obj.section, features = gene_mask, cells = cell_mask)
+
+n_cells_after <- ncol(obj.section)
+n_genes_after <- nrow(obj.section)
+
+cat(sprintf("\nFiltering:\n"))
+cat(sprintf("  Cells: %d -> %d (%.1f%% retained)\n", 
+            n_cells_before, n_cells_after, 
+            100 * n_cells_after / n_cells_before))
+cat(sprintf("  Genes: %d -> %d (%.1f%% retained)\n",
+            n_genes_before, n_genes_after,
+            100 * n_genes_after / n_genes_before))
+```
+
+```{r load_reference}
+# Load processed reference datasets (snRNA-seq)
+obj.ref.glutamatergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_glutamatergic_processed.rds"))
+obj.ref.gabaergic <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_gabaergic_processed.rds"))
+obj.ref.nonneuronal <- readRDS(paste0(dir.list$snrna$seurat$processed, "mouse_v1_nonneuronal_processed.rds"))
+
+# Add class labels
+obj.ref.glutamatergic$class <- "glutamatergic"
+obj.ref.gabaergic$class <- "gabaergic"
+obj.ref.nonneuronal$class <- "nonneuronal"
+
+# Combine references
+obj.ref <- merge(obj.ref.glutamatergic, 
+                 y = c(obj.ref.gabaergic, obj.ref.nonneuronal))
+rm(obj.ref.glutamatergic, obj.ref.gabaergic, obj.ref.nonneuronal)
+
+obj.ref$method <- "snRNA-seq"
+
+cat(sprintf("Reference: %d cells, %d genes\n", ncol(obj.ref), nrow(obj.ref)))
+cat("\nClass distribution:\n")
+print(table(obj.ref$class))
+cat("\nSubclass distribution:\n")
+print(table(obj.ref$subclass))
+```
+
+```{r batched_integration}
+# Integrate in batches to manage memory
+# Process in chunks of 1000 spatial cells
+batch_size <- 5000
+spatial_cells <- colnames(obj.section)
+n_batches <- ceiling(length(spatial_cells) / batch_size)
+
+# Initialize storage for labels
+label_df <- data.frame(
+  cell = character(),
+  subclass_nn = character(),
+  stringsAsFactors = FALSE
+)
+
+cat(sprintf("Processing %d cells in %d batches of %d\n", 
+            length(spatial_cells), n_batches, batch_size))
+
+for (i in 1:n_batches) {
+  
+  # Define batch
+  start_idx <- (i - 1) * batch_size + 1
+  end_idx <- min(i * batch_size, length(spatial_cells))
+  batch_cells <- spatial_cells[start_idx:end_idx]
+  
+  cat(sprintf("\nBatch %d/%d: cells %d-%d (%d cells)\n", 
+              i, n_batches, start_idx, end_idx, length(batch_cells)))
+  
+  # Subset spatial object
+  obj.section.batch <- subset(obj.section, cells = batch_cells)
+  
+  # Integrate with reference
+  obj.integrated <- IntegrateObjects(
+    obj.ref,
+    obj.section.batch,
+    resolutions = 0.5,
+    subsample = FALSE
+  )
+  
+  # Label by nearest neighbors
+  obj.integrated <- LabelByNearestNeighbors(
+    obj.integrated,
+    ident = "subclass",
+    output_col = "subclass_nn",
+    reduction = "umap",
+    dims = 1:2,
+    fraction = 0.25,
+    n.neighbors = 100
+  )
+  
+  # Extract labels for spatial cells
+  batch_labels <- obj.integrated$subclass_nn[obj.integrated$method == "Stereo-seq"]
+  batch_df <- data.frame(
+    cell = names(batch_labels),
+    subclass_nn = as.character(batch_labels),
+    stringsAsFactors = FALSE
+  )
+  
+  # Report unlabeled fraction
+  none_frac <- sum(batch_df$subclass_nn == "None") / nrow(batch_df)
+  cat(sprintf("  Labeled: %.1f%%, None: %.1f%%\n", 
+              100 * (1 - none_frac), 100 * none_frac))
+  
+  # Append to results
+  label_df <- rbind(label_df, batch_df)
+}
+
+cat(sprintf("\nTotal labels assigned: %d\n", nrow(label_df)))
+```
+
+```{r transfer_labels}
+# Transfer labels to section object
+obj.section$subclass_nn <- NA
+obj.section$subclass_nn[label_df$cell] <- label_df$subclass_nn
+
+cat("\nFinal label distribution:\n")
+print(table(obj.section$subclass_nn, useNA = "ifany"))
+```
+
+```{r plot_labeled_section, fig.width=15, fig.height=10}
+# Filter to labeled glutamatergic and oligodendrocyte subclasses
+subclasses_to_plot <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6IT", "L6CT", "L6b", "OD")
+obj.section.plot <- subset(obj.section, subclass_nn %in% subclasses_to_plot)
+
+# Set colors and levels
+Idents(obj.section.plot) <- "subclass_nn"
+levels(obj.section.plot) <- subclasses_to_plot
+
+# Glutamatergic colors (8 subclasses)
+colors <- hcl.colors(8, palette = "Dynamic")
+colors[2] <- "#6d6e71"
+names(colors) <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6IT", "L6CT", "L6b")
+colors[["OD"]] <- "#B5542A"
+
+p <- ImageDimPlot(obj.section.plot, cols = colors, size = 3, fov = "FOV") +
+  ggtitle(paste0(section.name, " - Labeled Subclasses"))
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3A_Mouse-Section-Subclass-Spatial")
+```
+
+```{r}
+p <- ImageDimPlot(obj.section.mouse, size = 3, fov = "FOV") +
+  ggtitle(paste0(section.name, " - Labeled Subclasses"))
+print(p)
+```
+
+
+```{r save_results}
+# Save labeled section object
+output.file <- paste0(dir.list$spatial$seurat$processed, "mouse_", tolower(section.name), "_labeled.rds")
+saveRDS(obj.section, output.file)
+cat(sprintf("\nSaved labeled section to %s\n", output.file))
+
+# Save labels separately
+labels.file <- paste0(dir.list$spatial$seurat$processed, "mouse_", tolower(section.name), "_labels.csv")
+write.csv(label_df, labels.file, row.names = FALSE)
+cat(sprintf("Saved labels to %s\n", labels.file))
+```
