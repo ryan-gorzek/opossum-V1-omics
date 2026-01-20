@@ -1,0 +1,137 @@
+---
+title: "Figure S1E-F: Compare Genes and UMIs across Opossum Genome Versions and Mouse"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(clustree)
+library(reticulate)
+library(comparatome)
+source("config.R")
+```
+
+```{r}
+# Load 10X data for each genome version
+samples.path <- paste0(dir.list$central, "samples/")
+
+# Mouse samples - combine across classes
+mouse.samples <- c("P38_1a", "P38_2a", "P38_2b")
+mouse.classes <- c("MouseV1-Glut", "MouseV1-GABA", "MouseV1-Non")
+
+mouse.list <- list()
+for (cl in mouse.classes) {
+  for (s in mouse.samples) {
+    path <- paste0(samples.path, cl, "/", s)
+    if (dir.exists(path)) {
+      data <- Read10X(path, gene.column = 1)
+      obj <- CreateSeuratObject(counts = data, project = "Mouse")
+      obj$sample <- s
+      obj$version <- "Mouse"
+      mouse.list[[paste0(cl, "_", s)]] <- obj
+    }
+  }
+}
+obj.mouse <- merge(mouse.list[[1]], mouse.list[-1])
+
+# Opossum samples - load each genome version
+opossum.samples <- c("OpossumV1-3A", "OpossumV1-3B", "OpossumV1-4A", "OpossumV1-4B")
+opossum.versions <- list(
+  "Original" = "__ORIGINAL__",
+  "EX3KB" = "__EX3KB__",
+  "EX5KB" = "__EX5KB__"
+)
+
+opossum.list <- list()
+for (v in names(opossum.versions)) {
+  for (s in opossum.samples) {
+    path <- paste0(samples.path, opossum.versions[[v]], "/", s)
+    if (dir.exists(path)) {
+      data <- Read10X(path)
+      obj <- CreateSeuratObject(counts = data, project = v)
+      obj$sample <- s
+      obj$version <- v
+      opossum.list[[paste0(v, "_", s)]] <- obj
+    }
+  }
+}
+obj.opossum <- merge(opossum.list[[1]], opossum.list[-1])
+
+# Combine all
+obj.all <- merge(obj.mouse, obj.opossum)
+obj.all$version <- factor(obj.all$version, levels = c("Original", "EX3KB", "EX5KB", "Mouse"))
+```
+
+```{r}
+# Filter cells
+obj.all <- subset(obj.all, nFeature_RNA < 6500 & nCount_RNA < 40000)
+
+# QC stats after filtering
+qc.stats.filtered <- obj.all@meta.data %>%
+  group_by(version) %>%
+  summarise(
+    n_cells = n(),
+    min_genes = min(nFeature_RNA),
+    max_genes = max(nFeature_RNA),
+    min_umis = min(nCount_RNA),
+    max_umis = max(nCount_RNA),
+    .groups = "drop"
+  )
+print("After filtering (nFeature_RNA < 6500 & nCount_RNA < 40000):")
+print(qc.stats.filtered)
+```
+
+```{r}
+# Compute medians and differences from Original
+medians <- obj.all@meta.data %>%
+  group_by(version) %>%
+  summarise(
+    median_genes = median(nFeature_RNA),
+    median_umis = median(nCount_RNA),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    diff_genes = median_genes - median_genes[version == "Original"],
+    diff_umis = median_umis - median_umis[version == "Original"]
+  )
+print(medians)
+```
+
+```{r, fig.width=3.5, fig.height=5}
+# Figure S1F: Genes per cell distribution
+version.colors <- c(
+  "Original" = "#e2b8d8",
+  "EX3KB" = "#d4a5c8",
+  "EX5KB" = "#c692b8",
+  "Mouse" = "#aaaaaa"
+)
+
+p.vln.genes <- VlnPlot(obj.all, features = "nFeature_RNA", group.by = "version", 
+                        pt.size = 0, cols = version.colors) +
+  NoLegend() +
+  labs(x = NULL, y = "Genes per cell", title = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(p.vln.genes)
+SavePNGandSVG(p.vln.genes, dir.list$figS1$plots, "S1E_OpossumMouse-GenesPerCell-VlnPlot")
+```
+
+```{r, fig.width=3.5, fig.height=5}
+# Figure S1G: UMIs per cell distribution
+p.vln.umis <- VlnPlot(obj.all, features = "nCount_RNA", group.by = "version", 
+                       pt.size = 0, cols = version.colors) +
+  NoLegend() +
+  labs(x = NULL, y = "UMIs per cell", title = NULL) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(p.vln.umis)
+SavePNGandSVG(p.vln.umis, dir.list$figS1$plots, "S1F_OpossumMouse-UMIsPerCell-VlnPlot")
+```
