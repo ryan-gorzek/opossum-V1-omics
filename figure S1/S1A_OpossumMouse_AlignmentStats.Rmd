@@ -1,0 +1,187 @@
+---
+title: "Figure S1A: Cell Ranger QC Metrics Across Genome Versions"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(reticulate)
+library(comparatome)
+source("config.R")
+```
+
+```{r colors}
+# Species/version color palette
+# Mouse and Original opossum use standard colors; EX3KB/EX5KB use intermediate shades
+version.colors <- c(
+
+"Mouse" = "#aaaaaa",
+  "Original" = "#c692b8",
+  "EX3KB" = "#d4a5c8",
+  "EX5KB" = "#e2b8d8"
+)
+```
+
+```{r locate_web_summaries}
+# Build paths to web summary files
+data.dir <- dir.list$figS1$data
+
+# Mouse samples
+mouse.samples <- c("P38_1a", "P38_2a", "P38_2b")
+mouse.files <- sapply(mouse.samples, function(s) {
+  file.path(data.dir, "Mouse", paste0(s, "_websummary.html"))
+})
+
+# Opossum samples across genome versions
+opossum.samples <- c("OpossumV1-3A", "OpossumV1-3B", "OpossumV1-4A", "OpossumV1-4B")
+opossum.versions <- c("Original", "EX3KB", "EX5KB")
+
+opossum.files <- unlist(lapply(opossum.versions, function(v) {
+  sapply(opossum.samples, function(s) {
+    file.path(data.dir, v, paste0(s, "_websummary.html"))
+  })
+}))
+
+# Combine all paths
+web_summaries <- c(mouse.files, opossum.files)
+names(web_summaries) <- NULL
+```
+
+```{python parse_html_summaries}
+from pathlib import Path
+import re
+
+def coerce_number(x):
+    if x is None:
+        return None
+    s = str(x).strip().replace(",", "")
+    if s == "" or s.lower() == "nan":
+        return None
+    if s.endswith("%"):
+        try:
+            return float(s.rstrip("%"))
+        except:
+            return None
+    try:
+        return float(s) if "." in s else int(s)
+    except:
+        return None
+
+def parse_old_format(html):
+    metrics = {}
+    pattern = r'<h[12][^>]*>([^<]+)</h[12]>\s*(?:<[^>]+>\s*)*<div class="summary_card_hero">([^<]+)</div>'
+    for match in re.finditer(pattern, html, re.DOTALL):
+        metrics[match.group(1).strip()] = match.group(2).strip()
+    pattern2 = r'<tr>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>\s*</tr>'
+    for match in re.finditer(pattern2, html, re.DOTALL):
+        metrics[match.group(1).strip()] = match.group(2).strip()
+    return metrics
+
+def parse_new_format(html):
+    metrics = {}
+    pattern = r'\{"[^}]*"metric"\s*:\s*"([^"]+)"[^}]*"name"\s*:\s*"([^"]+)"[^}]*\}'
+    for match in re.finditer(pattern, html):
+        metrics[match.group(2)] = match.group(1)
+    pattern2 = r'\{"[^}]*"name"\s*:\s*"([^"]+)"[^}]*"metric"\s*:\s*"([^"]+)"[^}]*\}'
+    for match in re.finditer(pattern2, html):
+        if match.group(1) not in metrics:
+            metrics[match.group(1)] = match.group(2)
+    pattern3 = r'\["([^"]+)",\s*"([0-9,.]+%?)"(?:,|\])'
+    for match in re.finditer(pattern3, html):
+        label = match.group(1).strip()
+        if label and not any(x in label.lower() for x in ['the ', 'fraction of', 'number of']):
+            metrics[label] = match.group(2).strip()
+    return metrics
+
+def parse_html(ws_path):
+    with open(ws_path, 'r', encoding='utf-8', errors='ignore') as f:
+        html = f.read()
+    metrics = parse_new_format(html)
+    metrics.update(parse_old_format(html))
+    return metrics
+
+rows = []
+for ws in r.web_summaries:
+    ws = Path(ws)
+    if not ws.exists():
+        continue
+    sample = ws.stem.replace("_websummary", "")
+    version = ws.parent.name
+    try:
+        metrics = parse_html(ws)
+    except:
+        continue
+    rows.append({
+        "sample": sample,
+        "version": version,
+        "mean_reads_per_cell": coerce_number(metrics.get("Mean Reads per Cell")),
+        "median_umis_per_cell": coerce_number(metrics.get("Median UMI Counts per Cell")),
+        "median_genes_per_cell": coerce_number(metrics.get("Median Genes per Cell")),
+        "reads_in_cells_pct": coerce_number(metrics.get("Fraction Reads in Cells")),
+        "mapped_conf_transcriptome_pct": coerce_number(metrics.get("Reads Mapped Confidently to Transcriptome")),
+    })
+```
+
+```{r process_data}
+# Convert Python list to R data frame
+qc.data <- do.call(rbind, lapply(py$rows, as.data.frame))
+qc.data$version <- factor(qc.data$version, levels = c("Mouse", "Original", "EX3KB", "EX5KB"))
+qc.data$species <- ifelse(qc.data$version == "Mouse", "Mouse", "Opossum")
+print(qc.data)
+```
+
+```{r figure_s1a_top, fig.width=1.25, fig.height=3}
+# Figure S1A (top): Mean reads per cell - Mouse vs Opossum (Original)
+qc.compare <- qc.data %>%
+  filter(version %in% c("Mouse", "Original")) %>%
+  mutate(species = ifelse(version == "Mouse", "Mouse", "Opossum")) %>%
+  mutate(species = factor(species, levels = c("Mouse", "Opossum"))) %>%
+  mutate(mean_reads_per_cell_100 = mean_reads_per_cell / 1000)
+
+p.s1a.top <- ggplot(qc.compare, aes(x = species, y = mean_reads_per_cell_100, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1.5) +
+  scale_y_continuous(breaks = seq(0, 60, 15), expand = c(0, 0), limits = c(0, 60)) +
+  scale_fill_manual(values = c("Opossum" = "#e2b8d8", "Mouse" = "#aaaaaa"), guide = "none") +
+  theme_classic() + 
+  theme(
+    axis.text = element_text(color = "black"), 
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)
+  ) + 
+  labs(x = NULL, y = "Mean Reads per Cell (×1000)")
+print(p.s1a.top)
+SavePNGandSVG(p.s1a.top, dir.list$figS1$plots, "S1A_OpossumMouse-ReadsPerCell-BarPlot")
+```
+
+```{r figure_s1a_bottom, fig.width=1.25, fig.height=3}
+# Figure S1A (bottom): % reads mapped to transcriptome - Mouse vs Opossum (Original)
+qc.compare <- qc.data %>%
+  filter(version %in% c("Mouse", "Original")) %>%
+  mutate(species = ifelse(version == "Mouse", "Mouse", "Opossum")) %>%
+  mutate(species = factor(species, levels = c("Mouse", "Opossum")))
+
+p.s1a.bot <- ggplot(qc.compare, aes(x = species, y = mapped_conf_transcriptome_pct, fill = species)) +
+  geom_bar(stat = "summary", fun = "median", position = position_dodge(width = 0.8), 
+           width = 0.75) +
+  geom_point(colour = "black", position = position_dodge(width = 0.8), size = 1.5) +
+  scale_y_continuous(breaks = seq(0, 100, 20), expand = c(0, 0), limits = c(0, 100)) +
+  scale_fill_manual(values = c("Opossum" = "#e2b8d8", "Mouse" = "#aaaaaa"), guide = "none") +
+  theme_classic() + 
+  theme(
+    axis.text = element_text(color = "black"), 
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)
+  ) + 
+  labs(x = NULL, y = "Reads Mapped Confidently to Transcriptome (%)")
+print(p.s1a.bot)
+SavePNGandSVG(p.s1a.bot, dir.list$figS1$plots, "S1A_OpossumMouse-TranscriptomeMapping-BarPlot")
+```
