@@ -1,0 +1,1108 @@
+---
+title: "Figure 3F-J: IT Subclass PC Gradients in Opossum and Mouse"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+# Conda environment with required packages: numpy pandas scipy scikit-learn networkx py-pcha
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/TLab/anaconda3/envs/pcha/python.exe")
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(reticulate)
+library(comparatome)
+source("config.R")
+use_condaenv("pcha")
+```
+
+```{r load_integrated_data}
+# Load integrated objects containing both snRNA-seq and Stereo-seq data
+obj.i.mouse <- readRDS(paste0(dir.list$spatial$seurat$processed, "mouse_stereoseq_integrated.rds"))
+obj.i.opossum <- readRDS(paste0(dir.list$spatial$seurat$processed, "opossum_stereoseq_integrated.rds"))
+
+cat(sprintf("Mouse integrated: %d cells\n", ncol(obj.i.mouse)))
+cat(sprintf("Opossum integrated: %d cells\n", ncol(obj.i.opossum)))
+```
+
+```{r, filter_IT_subtypes_mouse}
+# Mouse IT cells
+IT.sn.names.mouse <- colnames(obj.i.mouse)[obj.i.mouse$subclass %in% c("L2/3", "L4", "L5IT")]
+IT.sp.names.mouse <- colnames(obj.i.mouse)[obj.i.mouse$subclass_nn %in% c("L2/3", "L4", "L5IT")]
+IT.cells.mouse <- unique(c(IT.sn.names.mouse, IT.sp.names.mouse))
+
+# Subset without images
+obj.i.mouse.noimg <- obj.i.mouse
+obj.i.mouse.noimg@images <- list()
+obj.i.mouse.IT <- obj.i.mouse.noimg[, IT.cells.mouse]
+
+# Restore images with only spatial cells present in subset
+spatial_cells_in_subset <- intersect(IT.sp.names.mouse, colnames(obj.i.mouse.IT))
+if(length(spatial_cells_in_subset) > 0) {
+  for(img_name in c("COL")) {
+    obj.i.mouse.IT@images[[img_name]] <- subset(obj.i.mouse@images[[img_name]], 
+                                                  cells = spatial_cells_in_subset)
+  }
+}
+
+# Opossum IT cells
+IT.sn.names.opossum <- colnames(obj.i.opossum)[obj.i.opossum$subclass %in% c("IT_A", "IT_B", "IT_C")]
+IT.sp.names.opossum <- colnames(obj.i.opossum)[obj.i.opossum$subclass_nn %in% c("IT_A", "IT_B", "IT_C")]
+IT.cells.opossum <- unique(c(IT.sn.names.opossum, IT.sp.names.opossum))
+
+obj.i.opossum.noimg <- obj.i.opossum
+obj.i.opossum.noimg@images <- list()
+obj.i.opossum.IT <- obj.i.opossum.noimg[, IT.cells.opossum]
+
+spatial_cells_in_subset <- intersect(IT.sp.names.opossum, colnames(obj.i.opossum.IT))
+if(length(spatial_cells_in_subset) > 0) {
+  for(img_name in c("COL")) {
+    obj.i.opossum.IT@images[[img_name]] <- subset(obj.i.opossum@images[[img_name]], 
+                                                    cells = spatial_cells_in_subset)
+  }
+}
+```
+
+```{r}
+cat(sprintf("Mouse IT neurons: %d cells (%d snRNA, %d spatial)\n", 
+            ncol(obj.i.mouse.IT), length(IT.sn.names.mouse), length(IT.sp.names.mouse)))
+obj.i.mouse.IT$method[is.na(obj.i.mouse.IT$method)] <- "Stereo-seq"
+cat(sprintf("Opossum IT neurons: %d cells (%d snRNA, %d spatial)\n", 
+            ncol(obj.i.opossum.IT), length(IT.sn.names.opossum), length(IT.sp.names.opossum)))
+obj.i.opossum.IT$method[is.na(obj.i.opossum.IT$method)] <- "Stereo-seq"
+```
+
+```{r run_pca}
+# Run PCA - PC2 and PC3 typically capture IT continuum better than PC1 (technical variation)
+obj.i.mouse.IT$method[is.na(obj.i.mouse.IT$method)] <- "Stereo-seq"
+obj.i.mouse.IT <- RunPCA(obj.i.mouse.IT, npcs = 30, verbose = FALSE)
+obj.i.opossum.IT <- RunPCA(obj.i.opossum.IT, npcs = 30, verbose = FALSE)
+
+# Get all colors
+colors <- get_colors()
+
+# Function to plot PCA with snRNA gray and spatial colored by subclass
+plot_pca_by_method <- function(obj, colors, title, dims = c(2, 3)) {
+  pca_coords <- Embeddings(obj, "pca")[, dims]
+  df <- data.frame(
+    PC_x = pca_coords[, 1],
+    PC_y = pca_coords[, 2],
+    method = obj$method,
+    subclass = ifelse(obj$method == "Stereo-seq", 
+                      as.character(obj$subclass_nn), 
+                      "snRNA-seq")
+  )
+  
+  # Order so spatial cells plot on top
+  df <- df[order(df$method == "Stereo-seq"), ]
+  
+  # Build color vector: gray for snRNA, subclass colors for spatial
+  spatial_subclasses <- unique(df$subclass[df$subclass != "snRNA-seq"])
+  color_vec <- c("snRNA-seq" = "gray70", unlist(colors[spatial_subclasses]))
+  
+  p <- ggplot(df, aes(x = PC_x, y = PC_y, color = subclass)) +
+    geom_point(size = 1.5, alpha = 1) +
+    scale_color_manual(values = color_vec) +
+    labs(x = paste0("PC", dims[1]), y = paste0("PC", dims[2]), title = title) +
+    coord_equal() +
+    theme_classic() +
+    guides(color = guide_legend(override.aes = list(size = 3)))
+  print(p)
+  return(p)
+}
+
+# Mouse plots
+p.m <- plot_pca_by_method(obj.i.mouse.IT, colors, "Mouse IT - PC2 vs PC3")
+SavePNGandSVG(p.m, dir.list$fig3$plots, "3F_Mouse-SpatialITSubclass-PCAEmbeddings")
+
+# Opossum plots
+p.o <- plot_pca_by_method(obj.i.opossum.IT, colors, "Opossum IT - PC2 vs PC3")
+SavePNGandSVG(p.o, dir.list$fig3$plots, "3F_Opossum-SpatialITSubclass-PCAEmbeddings")
+```
+
+```{r export_pc_coordinates}
+# Export PC coordinates for Python RGB calculation
+df.mouse <- data.frame(
+  cell = colnames(obj.i.mouse.IT),
+  method = obj.i.mouse.IT$method,
+  subclass_nn = ifelse(obj.i.mouse.IT$method == "Stereo-seq", 
+                   obj.i.mouse.IT$subclass_nn, 
+                   obj.i.mouse.IT$subclass),
+  X = obj.i.mouse.IT@reductions$pca@cell.embeddings[, 2],
+  Y = obj.i.mouse.IT@reductions$pca@cell.embeddings[, 3]
+)
+write.csv(df.mouse, paste0(dir.list$fig3$data, "mouse_integrated_PC_coords.csv"), row.names = FALSE)
+
+df.opossum <- data.frame(
+  cell = colnames(obj.i.opossum.IT),
+  method = obj.i.opossum.IT$method,
+  subclass_nn = ifelse(obj.i.opossum.IT$method == "Stereo-seq",
+                   obj.i.opossum.IT$subclass_nn,
+                   obj.i.opossum.IT$subclass),
+  X = obj.i.opossum.IT@reductions$pca@cell.embeddings[, 2],
+  Y = obj.i.opossum.IT@reductions$pca@cell.embeddings[, 3]
+)
+write.csv(df.opossum, paste0(dir.list$fig3$data, "opossum_integrated_PC_coords.csv"), row.names = FALSE)
+
+cat("Exported PC coordinates\n")
+```
+
+```{python find_triangle_vertices_mouse}
+# Find convex hull vertices in PC space using PCHA
+# Identifies extreme points defining the IT subtype continuum
+
+import pandas as pd
+import numpy as np
+from py_pcha import PCHA
+from collections import Counter
+
+# Load and filter for spatial cells (cleaner spatial distribution)
+df = pd.read_csv(r['dir.list']['fig3']['data'] + "mouse_integrated_PC_coords.csv")
+df_spatial = df.loc[df["method"] == "Stereo-seq"]
+X = np.array(df_spatial[["X", "Y"]])
+
+# Find 3 vertices (triangle corners)
+XC, S, C, SSE, varexpl = PCHA(X.T, noc=3, delta=0.1)
+
+# Identify which vertex corresponds to which subclass
+# For each vertex, find nearest cells and determine majority subclass
+vertex_subclasses = []
+for i in range(3):
+    vertex = XC[:, i].reshape(1, -1)
+    # Calculate distances to all spatial cells
+    coords = np.array(df_spatial[["X", "Y"]])
+    distances = np.linalg.norm(coords - vertex, axis=1)
+    # Get 50 nearest cells
+    nearest_idx = np.argsort(distances)[:50]
+    # Get subclass labels for these cells from the CSV
+    nearest_subclasses = df_spatial.iloc[nearest_idx]['subclass_nn'].values
+    subclass_counts = Counter(nearest_subclasses)
+    vertex_subclasses.append(subclass_counts.most_common(1)[0][0])
+
+print(f"Vertex identification: {vertex_subclasses}")
+
+# Create mapping to desired order: A (L2/3), B (L4), C (L5IT)
+vertex_map = {}
+for i, subclass in enumerate(vertex_subclasses):
+    vertex_map[subclass] = i
+
+# Reorder vertices: [L2/3, L4, L5IT] -> [A, B, C]
+XC_mouse = XC[:, [vertex_map['L2/3'], vertex_map['L4'], vertex_map['L5IT']]]
+
+print("Mouse PC vertices (ordered A, B, C):")
+print(XC_mouse.T)
+```
+
+```{python find_triangle_vertices_opossum}
+# Find vertices for opossum
+
+df = pd.read_csv(r['dir.list']['fig3']['data'] + "opossum_integrated_PC_coords.csv")
+df_spatial = df.loc[df["method"] == "Stereo-seq"]
+X = np.array(df_spatial[["X", "Y"]])
+
+XC, S, C, SSE, varexpl = PCHA(X.T, noc=3, delta=0.1)
+
+# Identify which vertex corresponds to which subclass
+# For each vertex, find nearest cells and determine majority subclass
+vertex_subclasses = []
+for i in range(3):
+    vertex = XC[:, i].reshape(1, -1)
+    coords = np.array(df_spatial[["X", "Y"]])
+    distances = np.linalg.norm(coords - vertex, axis=1)
+    nearest_idx = np.argsort(distances)[:50]
+    # Get subclass labels for these cells from the CSV
+    nearest_subclasses = df_spatial.iloc[nearest_idx]['subclass_nn'].values
+    subclass_counts = Counter(nearest_subclasses)
+    vertex_subclasses.append(subclass_counts.most_common(1)[0][0])
+
+print(f"Vertex identification: {vertex_subclasses}")
+
+# Create mapping to desired order: A (IT_A), B (IT_B), C (IT_C)
+vertex_map = {}
+for i, subclass in enumerate(vertex_subclasses):
+    vertex_map[subclass] = i
+
+# Reorder vertices: [IT_A, IT_B, IT_C] -> [A, B, C]
+XC_opossum = XC[:, [vertex_map['IT_A'], vertex_map['IT_B'], vertex_map['IT_C']]]
+
+print("Opossum PC vertices (ordered A, B, C):")
+print(XC_opossum.T)
+```
+
+```{python calculate_rgb_mouse}
+# Calculate RGB colors using barycentric coordinates
+# Color interpolates based on position within triangle
+
+import numpy as np
+from scipy.spatial.distance import cdist
+import pandas as pd
+from sklearn.neighbors import kneighbors_graph
+import networkx as nx
+from collections import Counter
+
+def barycentric_coords(triangle, points):
+    """Calculate barycentric coordinates for RGB interpolation."""
+    # Ensure shapes: triangle -> (3, 2), points -> (N, 2)
+    tri = np.asarray(triangle, dtype=float).reshape(-1, 2)
+    pts = np.asarray(points, dtype=float)
+
+    A, B, C = tri[0], tri[1], tri[2]
+    v0 = B - A
+    v1 = C - A
+    v2 = pts - A  # (N, 2)
+
+    d00 = np.dot(v0, v0)
+    d01 = np.dot(v0, v1)
+    d11 = np.dot(v1, v1)
+    d20 = np.sum(v2 * v0, axis=1)
+    d21 = np.sum(v2 * v1, axis=1)
+
+    denom = d00 * d11 - d01 * d01
+    v = (d11 * d20 - d01 * d21) / denom
+    w = (d00 * d21 - d01 * d20) / denom
+    u = 1.0 - v - w
+
+    return np.column_stack([u, v, w])
+
+# Load full dataset
+df = pd.read_csv(r['dir.list']['fig3']['data'] + "mouse_integrated_PC_coords.csv")
+df_spatial = df.loc[df["method"] == "Stereo-seq"]
+cells = np.array(df_spatial[["X", "Y"]], dtype=float)
+cell_names = df_spatial["cell"].to_numpy()
+
+# Triangle vertices: shape (3, 2)
+vertices = np.asarray(XC_mouse.T, dtype=float)
+
+# Vertex colors: A=Cyan (L2/3), B=Yellow (L4), C=Purple (L5IT)
+colors = np.array([
+    [0.31764706,  0.94117647, 0.89019608],  # A: L2/3 (cyan)
+    [1.0,         0.95294118, 0.18823529],  # B: L4 (yellow)
+    [0.36863,     0.23529,    0.6      ]   # C: L5IT (purple)
+], dtype=float)
+
+# Calculate RGB via barycentric interpolation
+bary_coords = barycentric_coords(vertices, cells)
+bary_coords = np.clip(bary_coords, 0.0, 1.0)
+
+cell_colors = np.clip(bary_coords @ colors, 0.0, 1.0)
+
+rgb_df = pd.DataFrame(
+    cell_colors,
+    columns=["R", "G", "B"],
+    index=cell_names
+)
+
+# Euclidean distances to vertices
+euclidean_distances = cdist(cells, vertices, metric='euclidean')
+for i, vertex_label in enumerate(['Vertex_A', 'Vertex_B', 'Vertex_C']):
+    rgb_df[f'Euclidean_to_{vertex_label}'] = euclidean_distances[:, i]
+
+# Geodesic distances via KNN graph
+n_neighbors = 5
+knn_graph = kneighbors_graph(
+    cells, n_neighbors=n_neighbors,
+    mode='distance', include_self=False
+)
+G = nx.from_scipy_sparse_array(knn_graph, edge_attribute='weight')
+
+vertex_indices = [
+    np.argmin(np.linalg.norm(cells - vertex, axis=1))
+    for vertex in vertices
+]
+
+geodesic_distances = np.zeros((cells.shape[0], len(vertices)))
+for idx, vertex_idx in enumerate(vertex_indices):
+    lengths = nx.single_source_dijkstra_path_length(G, vertex_idx)
+    geodesic_distances[:, idx] = [
+        lengths.get(i, np.inf) for i in range(cells.shape[0])
+    ]
+
+for i, vertex_label in enumerate(['Vertex_A', 'Vertex_B', 'Vertex_C']):
+    rgb_df[f'Geodesic_to_{vertex_label}'] = geodesic_distances[:, i]
+
+# Use r['dir.list'] again here
+rgb_df.to_csv(r['dir.list']['fig3']['data'] + "mouse_integrated_PC_colors.csv")
+
+print(
+    f"Mouse: {len(rgb_df)} cells | RGB range [0-1]: "
+    f"R[{rgb_df.R.min():.2f}-{rgb_df.R.max():.2f}] "
+    f"G[{rgb_df.G.min():.2f}-{rgb_df.G.max():.2f}] "
+    f"B[{rgb_df.B.min():.2f}-{rgb_df.B.max():.2f}]"
+)
+```
+
+```{python calculate_rgb_opossum}
+# Calculate RGB for opossum
+
+df = pd.read_csv(r['dir.list']['fig3']['data'] + "opossum_integrated_PC_coords.csv")
+df_spatial = df.loc[df["method"] == "Stereo-seq"]
+cells = np.array(df_spatial[["X", "Y"]])
+cell_names = df_spatial["cell"]
+
+# Triangle vertices: shape (3, 2)
+vertices = np.asarray(XC_opossum.T, dtype=float)
+
+# Vertex colors: A=Cyan (IT_A/L2/3), B=Yellow (IT_B/L4), C=Purple (IT_C/L5IT)
+colors = np.array([
+    [0.31764706,  0.94117647, 0.89019608],  # A: IT_A (cyan)
+    [1.0,         0.95294118, 0.18823529],  # B: IT_B (yellow)
+    [0.36863,     0.23529,    0.6      ]   # C: IT_C (purple)
+], dtype=float)
+
+# Calculate RGB via barycentric interpolation
+bary_coords = barycentric_coords(vertices, cells)
+bary_coords = np.clip(bary_coords, 0.0, 1.0)
+
+cell_colors = np.clip(bary_coords @ colors, 0.0, 1.0)
+
+rgb_df = pd.DataFrame(
+    cell_colors,
+    columns=["R", "G", "B"],
+    index=cell_names
+)
+
+# Euclidean distances to vertices
+euclidean_distances = cdist(cells, vertices, metric='euclidean')
+for i, vertex_label in enumerate(['Vertex_A', 'Vertex_B', 'Vertex_C']):
+    rgb_df[f'Euclidean_to_{vertex_label}'] = euclidean_distances[:, i]
+
+# Geodesic distances via KNN graph
+n_neighbors = 5
+knn_graph = kneighbors_graph(
+    cells, n_neighbors=n_neighbors,
+    mode='distance', include_self=False
+)
+G = nx.from_scipy_sparse_array(knn_graph, edge_attribute='weight')
+
+vertex_indices = [
+    np.argmin(np.linalg.norm(cells - vertex, axis=1))
+    for vertex in vertices
+]
+
+geodesic_distances = np.zeros((cells.shape[0], len(vertices)))
+for idx, vertex_idx in enumerate(vertex_indices):
+    lengths = nx.single_source_dijkstra_path_length(G, vertex_idx)
+    geodesic_distances[:, idx] = [
+        lengths.get(i, np.inf) for i in range(cells.shape[0])
+    ]
+
+for i, vertex_label in enumerate(['Vertex_A', 'Vertex_B', 'Vertex_C']):
+    rgb_df[f'Geodesic_to_{vertex_label}'] = geodesic_distances[:, i]
+
+# Use r['dir.list'] again here
+rgb_df.to_csv(r['dir.list']['fig3']['data'] + "opossum_integrated_PC_colors.csv")
+
+print(
+    f"Opossum: {len(rgb_df)} cells | RGB range [0-1]: "
+    f"R[{rgb_df.R.min():.2f}-{rgb_df.R.max():.2f}] "
+    f"G[{rgb_df.G.min():.2f}-{rgb_df.G.max():.2f}] "
+    f"B[{rgb_df.B.min():.2f}-{rgb_df.B.max():.2f}]"
+)
+```
+
+```{r plot_pc_gradients, fig.width=6, fig.height=6}
+# RGB gradients in PC space - Figure 3G
+DimPlotGradient <- function(obj, rgb_csv, pc1 = "PC_2", pc2 = "PC_3", size = 2) {
+  
+  # Load RGB colors from CSV
+  rgb_data <- read.csv(rgb_csv, row.names = 1)
+  
+  # Extract PC coordinates from the Seurat object
+  pc_coords <- Embeddings(obj, reduction = "pca")[, c(pc1, pc2)]
+  
+  # Create dataframe
+  df <- data.frame(PC1 = pc_coords[, 1], PC2 = pc_coords[, 2], cells = rownames(pc_coords))
+  
+  # Merge colors with PC coordinates
+  df <- merge(df, rgb_data, by.x = "cells", by.y = "row.names", all.x = TRUE)
+  df <- df[!is.na(df$R), ]
+  
+  # Ensure RGB values are within range [0,1]
+  df$R <- pmax(0, pmin(1, df$R))
+  df$G <- pmax(0, pmin(1, df$G))
+  df$B <- pmax(0, pmin(1, df$B))
+  
+  # Convert RGB to hex color codes
+  df$hex_color <- with(df, rgb(R, G, B, maxColorValue = 1))
+  
+  # Reorder points for proper layering
+  df <- df[order(df$R + df$G + df$B, decreasing = FALSE), ]
+  
+  # Generate scatter plot
+  p <- ggplot(df, aes(x = PC1, y = PC2, color = hex_color)) +
+    geom_point(shape = 19, size = size, alpha = 1) +
+    scale_color_identity() +  # Directly use hex colors, no legend
+    theme_minimal() +
+    theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+    guides(color = "none") +  # Remove color legend
+    coord_equal()
+  
+  return(p)
+}
+
+# Mouse
+p <- DimPlotGradient(
+  obj = obj.i.mouse.IT,
+  rgb_csv = paste0(dir.list$fig3$data, "mouse_integrated_PC_colors.csv"),
+  size = 3
+)
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3G_Mouse-SpatialIT-PCGradient")
+
+# Opossum
+p <- DimPlotGradient(
+  obj = obj.i.opossum.IT,
+  rgb_csv = paste0(dir.list$fig3$data, "opossum_integrated_PC_colors.csv"),
+  pc1 = "PC_2",
+  pc2 = "PC_3",
+  size = 3
+)
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3G_Opossum-SpatialIT-PCGradient")
+```
+
+```{r plot_spatial_gradients_mouse, fig.width=8, fig.height=5}
+# RGB gradients in spatial coordinates - Mouse (Figure 3H - top)
+
+mouse.rgb <- paste0(dir.list$fig3$data, "mouse_integrated_PC_colors.csv")
+
+# All IT subtypes
+p <- PlotImageDimGradient(obj = obj.i.mouse.IT, rgb_csv = mouse.rgb, 
+                          ratio = 1.5, size = 2, yticks = c(0, 500, 1000, 1500)) +
+                          scale_y_continuous(limits = c(0, 1500)) +
+                          coord_fixed(ratio = 1.5) + theme(axis.text.y = element_text())
+print(p)
+
+# L2/3
+p <- PlotImageDimGradient(obj = subset(obj.i.mouse.IT, subclass_nn == "L2/3"), 
+                          rgb_csv = mouse.rgb, ratio = 1.5, yticks = c(0, 500, 1000, 1500)) +
+                          scale_y_continuous(limits = c(0, 1500)) +
+                          coord_fixed(ratio = 1.5) + ggtitle("Mouse L2/3")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Mouse-SpatialL23-ColumnGradient")
+
+# L4
+p <- PlotImageDimGradient(obj = subset(obj.i.mouse.IT, subclass_nn == "L4"),
+                          rgb_csv = mouse.rgb, ratio = 1.5, yticks = c(0, 500, 1000, 1500)) +
+                          scale_y_continuous(limits = c(0, 1500)) +
+                          coord_fixed(ratio = 1.5) + ggtitle("Mouse L4")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Mouse-SpatialL4-ColumnGradient")
+
+# L5IT
+p <- PlotImageDimGradient(obj = subset(obj.i.mouse.IT, subclass_nn == "L5IT"),
+                          rgb_csv = mouse.rgb, ratio = 1.5, yticks = c(0, 500, 1000, 1500)) +
+                          scale_y_continuous(limits = c(0, 1500)) +
+                          coord_fixed(ratio = 1.5) + ggtitle("Mouse L5IT")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Mouse-SpatialL5IT-ColumnGradient")
+```
+
+```{r plot_spatial_gradients_opossum, fig.width=8, fig.height=5}
+# RGB gradients in spatial coordinates - Opossum (Figure 3H - bottom)
+
+opossum.rgb <- paste0(dir.list$fig3$data, "opossum_integrated_PC_colors.csv")
+
+# All IT subtypes
+p <- PlotImageDimGradient(obj = obj.i.opossum.IT, rgb_csv = opossum.rgb,
+                          ratio = 0.77 * 1.5, size = 2, yticks = c(0, 400, 800, 1200, 1600)) +
+                          scale_y_continuous(limits = c(0, 1600)) +
+                          coord_fixed(ratio = 0.77 * 1.5) + theme(axis.text.y = element_text())
+print(p)
+
+# IT_A
+p <- PlotImageDimGradient(obj = subset(obj.i.opossum.IT, subclass_nn == "IT_A"),
+                          rgb_csv = opossum.rgb, ratio = 0.77 * 1.5, 
+                          yticks = c(0, 400, 800, 1200, 1600)) +
+                          scale_y_continuous(limits = c(0, 1600)) +
+                          coord_fixed(ratio = 0.77 * 1.5) + ggtitle("Opossum IT_A")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Opossum_SpatialITA-ColumnGradient")
+
+# IT_B
+p <- PlotImageDimGradient(obj = subset(obj.i.opossum.IT, subclass_nn == "IT_B"),
+                          rgb_csv = opossum.rgb, ratio = 0.77 * 1.5,
+                          yticks = c(0, 400, 800, 1200, 1600)) + 
+                          scale_y_continuous(limits = c(0, 1600)) +
+                          coord_fixed(ratio = 0.77 * 1.5) + ggtitle("Opossum IT_B")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Opossum_SpatialITB-ColumnGradient")
+
+# IT_C
+p <- PlotImageDimGradient(obj = subset(obj.i.opossum.IT, subclass_nn == "IT_C"),
+                          rgb_csv = opossum.rgb, ratio = 0.77 * 1.5,
+                          yticks = c(0, 400, 800, 1200, 1600)) +
+                          scale_y_continuous(limits = c(0, 1600)) +
+                          coord_fixed(ratio = 0.77 * 1.5) + ggtitle("Opossum IT_C")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3H_Opossum_SpatialITC-ColumnGradient")
+```
+
+```{r, fig.width=2, fig.height=3}
+calculate_density_by_layer_sample <- function(obj, subclass_query, subclass_ref, scale_to_mm = 0.0005) {
+  
+  coords <- as.data.frame(obj@images[[1]]$centroids@coords)
+  colnames(coords) <- c("depth", "tangential")
+  
+  spatial_cells <- Cells(obj@images[[1]])
+  coords$subclass_nn <- obj$subclass_nn[spatial_cells]
+  coords$sample <- obj$sample[spatial_cells]
+  coords <- coords[!is.na(coords$subclass_nn), ]
+  
+  # Get mean depth of reference layer (across all samples)
+  ref_depth <- mean(coords$depth[coords$subclass_nn == subclass_ref], na.rm = TRUE)
+  
+  # Calculate per sample
+  results <- lapply(unique(coords$sample), function(s) {
+    coords_s <- coords[coords$sample == s, ]
+    coords_query <- coords_s[coords_s$subclass_nn == subclass_query, ]
+    coords_query$position <- ifelse(coords_query$depth > ref_depth, "above", "below")
+    
+    width_mm <- diff(range(coords_s$tangential)) * scale_to_mm
+    
+    depth_above <- coords_query$depth[coords_query$position == "above"]
+    depth_below <- coords_query$depth[coords_query$position == "below"]
+    
+    height_above_mm <- abs(max(depth_above) - ref_depth) * scale_to_mm
+    height_below_mm <- abs(ref_depth - min(depth_below)) * scale_to_mm
+    
+    area_above_mm2 <- width_mm * height_above_mm
+    area_below_mm2 <- width_mm * height_below_mm
+    
+    count_above <- sum(coords_query$position == "above")
+    count_below <- sum(coords_query$position == "below")
+    
+    density_above <- count_above / area_above_mm2
+    density_below <- count_below / area_below_mm2
+    
+    data.frame(
+      sample = s,
+      density_above = density_above,
+      density_below = density_below,
+      ratio_below_above = density_below / density_above
+    )
+  })
+  
+  do.call(rbind, results)
+}
+
+# Calculate per-sample densities
+density_mouse_samples <- calculate_density_by_layer_sample(obj.i.mouse.IT, "L2/3", "L4")
+density_mouse_samples$species <- "Mouse"
+
+density_opossum_samples <- calculate_density_by_layer_sample(obj.i.opossum.IT, "IT_A", "IT_B")
+density_opossum_samples$species <- "Opossum"
+
+density_samples <- rbind(density_mouse_samples, density_opossum_samples)
+print(density_samples)
+
+# Wilcoxon rank sum test on ratios
+wilcox_result <- wilcox.test(
+  ratio_below_above ~ species, 
+  data = density_samples
+)
+cat("\nWilcoxon rank sum test (below/above ratio):\n")
+cat("  W =", wilcox_result$statistic, "\n")
+cat("  p =", signif(wilcox_result$p.value, 3), "\n")
+
+# Summarize for barplot
+ratio_summary <- density_samples %>%
+  group_by(species) %>%
+  summarize(
+    mean_ratio = mean(ratio_below_above),
+    se_ratio = sd(ratio_below_above) / sqrt(n()),
+    .groups = "drop"
+  )
+
+p_ratio <- ggplot(ratio_summary, aes(x = species, y = mean_ratio, fill = species)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_errorbar(aes(ymin = mean_ratio - se_ratio, ymax = mean_ratio + se_ratio), 
+                width = 0.2) +
+  geom_jitter(data = density_samples, aes(y = ratio_below_above), 
+              width = 0.1, size = 2, shape = 21, fill = "black") +
+  scale_fill_manual(values = c("Opossum" = colors$Opossum, "Mouse" = colors$Mouse)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1)), limits = c(0, 0.35)) +
+  labs(x = NULL, y = "Density ratio (below / above L4)") +
+  theme_classic() +
+  theme(
+    axis.text = element_text(color = "black"),
+    legend.position = "none"
+  ) +
+  annotate("text", x = 1.5, y = max(ratio_summary$mean_ratio + ratio_summary$se_ratio) * 1.15,
+           label = sprintf("p = %s", signif(wilcox_result$p.value, 2)), size = 4)
+
+print(p_ratio)
+SavePNGandSVG(p_ratio, dir.list$fig3$plots, "3I_OpossumMouse-L23ITADensityAboveBelowRatio-Bar")
+```
+
+```{r}
+# Correlation between spatial Y position and PC vertex distances
+# Tests whether cells' positions along cortical depth correlate with their PC-space distances
+
+# Parameters
+mouse_subclass <- "L2/3"
+opossum_subclass <- "IT_A"
+vertices <- c("B", "C")  # Test distances to vertices B and C
+
+# Separate regimes for mouse and opossum (top of L2/3 to middle of L4)
+regimes <- list(
+  list(mouse = c(1000, 1550), opossum = c(800, 1550))
+)
+
+# Load distance data (already contains Euclidean and Geodesic distances)
+mouse.rgb <- read.csv(paste0(dir.list$fig3$data, "mouse_integrated_PC_colors.csv"), 
+                      row.names = 1)
+opossum.rgb <- read.csv(paste0(dir.list$fig3$data, "opossum_integrated_PC_colors.csv"), 
+                        row.names = 1)
+
+for (vertex_label in vertices) {
+  vertex_col <- paste0("Euclidean_to_Vertex_", vertex_label)
+  
+  # Extract mouse spatial coordinates and distances
+  mouse_cells <- colnames(obj.i.mouse.IT)[
+    !is.na(obj.i.mouse.IT$subclass_nn) & 
+    obj.i.mouse.IT$subclass_nn == mouse_subclass
+  ]
+  mouse_coords <- obj.i.mouse.IT@images[[1]]$centroids@coords[
+    obj.i.mouse.IT$subclass_nn[!is.na(obj.i.mouse.IT$subclass_nn)] == mouse_subclass,
+  ]
+  rownames(mouse_coords) <- mouse_cells
+  mouse_y_positions <- mouse_coords[mouse_cells, "x"]
+  mouse_distance <- mouse.rgb[mouse_cells, vertex_col]
+  
+  # Extract opossum spatial coordinates and distances
+  opossum_cells <- colnames(obj.i.opossum.IT)[
+    !is.na(obj.i.opossum.IT$subclass_nn) & 
+    obj.i.opossum.IT$subclass_nn == opossum_subclass
+  ]
+  opossum_coords <- obj.i.opossum.IT@images[[1]]$centroids@coords[
+    obj.i.opossum.IT$subclass_nn[!is.na(obj.i.opossum.IT$subclass_nn)] == opossum_subclass,
+  ]
+  rownames(opossum_coords) <- opossum_cells
+  opossum_y_positions <- opossum_coords[opossum_cells, "x"]
+  opossum_distance <- opossum.rgb[opossum_cells, vertex_col]
+  
+  for (regime in regimes) {
+    mouse_xmin <- regime$mouse[1]
+    mouse_xmax <- regime$mouse[2]
+    opossum_xmin <- regime$opossum[1]
+    opossum_xmax <- regime$opossum[2]
+    
+    # Filter by species-specific cortical depth regimes
+    mouse_idx <- mouse_y_positions >= mouse_xmin & mouse_y_positions < mouse_xmax
+    opossum_idx <- opossum_y_positions >= opossum_xmin & opossum_y_positions < opossum_xmax
+    
+    # Normalize Y positions to [0, 1] within each species' regime
+    mouse_y_norm <- 1 - (mouse_y_positions[mouse_idx] - mouse_xmin) / (mouse_xmax - mouse_xmin)
+    opossum_y_norm <- 1 - (opossum_y_positions[opossum_idx] - opossum_xmin) / (opossum_xmax - opossum_xmin)
+    
+    # Create combined dataframe with normalized positions
+    df_combined <- data.frame(
+      Y_Position_Normalized = c(mouse_y_norm, opossum_y_norm),
+      Distance = c(mouse_distance[mouse_idx], opossum_distance[opossum_idx]),
+      Species = c(rep("Mouse", sum(mouse_idx)), rep("Opossum", sum(opossum_idx)))
+    )
+    
+    mouse_regime <- df_combined[df_combined$Species == "Mouse", ]
+    opossum_regime <- df_combined[df_combined$Species == "Opossum", ]
+    
+    # Calculate Spearman correlations
+    mouse_cor <- cor.test(mouse_regime$Y_Position_Normalized, mouse_regime$Distance, 
+                          method = "spearman")
+    opossum_cor <- cor.test(opossum_regime$Y_Position_Normalized, opossum_regime$Distance, 
+                            method = "spearman")
+    
+    plot_title <- sprintf(
+      "Y Position vs. Distance (%s / %s, Vertex %s)",
+      mouse_subclass, opossum_subclass, vertex_label
+    )
+    
+    p <- ggplot(df_combined, aes(x = Y_Position_Normalized, y = Distance, color = Species)) +
+      geom_point(alpha = 0.75, size = 1) +
+      geom_smooth(method = "lm", se = TRUE) +
+      labs(
+        title = plot_title,
+        subtitle = sprintf(
+          "Mouse [%d-%d], Opossum [%d-%d]\nSpearman r: Mouse=%.2f (p=%.3g), Opossum=%.2f (p=%.3g)",
+          mouse_xmin, mouse_xmax, opossum_xmin, opossum_xmax,
+          mouse_cor$estimate, mouse_cor$p.value,
+          opossum_cor$estimate, opossum_cor$p.value
+        ),
+        x = "Normalized Y Position (0=superficial, 1=deep)",
+        y = vertex_col
+      ) +
+      theme_bw(base_size = 14) +
+      ylim(15, 45) +
+      xlim(0, 1) +
+      coord_fixed(ratio = 1 / 15) +
+      scale_color_manual(values = c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa"))
+    
+    print(p)
+    SavePNGandSVG(p, dir.list$fig3$plots,
+                  sprintf("3J_OpossumMouse-Spatial%s%s-CorrVertex%s-ScatterFit",
+                          gsub("/", "", mouse_subclass), opossum_subclass, vertex_label))
+  }
+}
+```
+
+```{r shuffle_control_setup}
+# Shuffle control: Randomize PC distance assignments
+# Tests if spatial gradient pattern is significant by shuffling distance values
+
+set.seed(9999)
+
+shuffle_distance_test <- function(y, x, n_perm = 10000L) {
+  # y = depth (Y_Position), x = distance values
+  obs_r <- suppressWarnings(cor(y, x, method = "spearman"))
+  r_perm <- numeric(n_perm)
+  
+  for (i in seq_len(n_perm)) {
+    x_perm <- sample(x, length(x), replace = FALSE)
+    r_perm[i] <- suppressWarnings(cor(y, x_perm, method = "spearman"))
+  }
+  
+  p_emp <- mean(abs(r_perm) >= abs(obs_r))
+  list(obs_r = obs_r, p_emp = p_emp, r_perm = r_perm)
+}
+
+shuffle_results_mouse <- list()
+shuffle_results_opossum <- list()
+```
+
+```{r shuffle_control_mouse}
+# Mouse shuffle control
+cat("=== Mouse Shuffle Control (Distance Randomization) ===\n")
+
+mouse_subclass <- "L2/3"
+vertices <- c("B", "C")
+regimes <- list(list(mouse = c(1000, 1550), opossum = c(1000, 1550)))
+
+mouse.rgb <- read.csv(paste0(dir.list$fig3$data, "mouse_integrated_PC_colors.csv"), 
+                      row.names = 1)
+
+for (vertex_label in vertices) {
+  vertex_col <- paste0("Euclidean_to_Vertex_", vertex_label)
+  
+  mouse_cells <- colnames(obj.i.mouse.IT)[
+    !is.na(obj.i.mouse.IT$subclass_nn) & 
+    obj.i.mouse.IT$subclass_nn == mouse_subclass
+  ]
+  mouse_coords <- obj.i.mouse.IT@images[[1]]$centroids@coords[
+    obj.i.mouse.IT$subclass_nn[!is.na(obj.i.mouse.IT$subclass_nn)] == mouse_subclass,
+  ]
+  rownames(mouse_coords) <- mouse_cells
+  mouse_y_positions <- mouse_coords[mouse_cells, "x"]
+  mouse_distance <- mouse.rgb[mouse_cells, vertex_col]
+  
+  for (regime in regimes) {
+    mouse_xmin <- regime$mouse[1]
+    mouse_xmax <- regime$mouse[2]
+    
+    idx <- mouse_y_positions >= mouse_xmin & mouse_y_positions < mouse_xmax
+    y_regime <- 1 - (mouse_y_positions[idx] - mouse_xmin) / (mouse_xmax - mouse_xmin)
+    x_regime <- mouse_distance[idx]
+    
+    res_shuffle <- shuffle_distance_test(
+      y = y_regime,
+      x = x_regime,
+      n_perm = 10000L
+    )
+    
+    key <- sprintf("Mouse_L23_Vertex_%s_%d_%d", vertex_label, mouse_xmin, mouse_xmax)
+    shuffle_results_mouse[[key]] <- res_shuffle
+    
+    cat(key, " | obs r =", round(res_shuffle$obs_r, 3),
+        " | shuffle p =", signif(res_shuffle$p_emp, 3), "\n")
+  }
+}
+```
+
+```{r shuffle_control_opossum}
+# Opossum shuffle control
+cat("\n=== Opossum Shuffle Control (Distance Randomization) ===\n")
+
+opossum_subclass <- "IT_A"
+
+opossum.rgb <- read.csv(paste0(dir.list$fig3$data, "opossum_integrated_PC_colors.csv"), 
+                        row.names = 1)
+
+for (vertex_label in vertices) {
+  vertex_col <- paste0("Euclidean_to_Vertex_", vertex_label)
+  
+  opossum_cells <- colnames(obj.i.opossum.IT)[
+    !is.na(obj.i.opossum.IT$subclass_nn) & 
+    obj.i.opossum.IT$subclass_nn == opossum_subclass
+  ]
+  opossum_coords <- obj.i.opossum.IT@images[[1]]$centroids@coords[
+    obj.i.opossum.IT$subclass_nn[!is.na(obj.i.opossum.IT$subclass_nn)] == opossum_subclass,
+  ]
+  rownames(opossum_coords) <- opossum_cells
+  opossum_y_positions <- opossum_coords[opossum_cells, "x"]
+  opossum_distance <- opossum.rgb[opossum_cells, vertex_col]
+  
+  for (regime in regimes) {
+    opossum_xmin <- regime$opossum[1]
+    opossum_xmax <- regime$opossum[2]
+    
+    idx <- opossum_y_positions >= opossum_xmin & opossum_y_positions < opossum_xmax
+    y_regime <- 1 - (opossum_y_positions[idx] - opossum_xmin) / (opossum_xmax - opossum_xmin)
+    x_regime <- opossum_distance[idx]
+    
+    res_shuffle <- shuffle_distance_test(
+      y = y_regime,
+      x = x_regime,
+      n_perm = 10000L
+    )
+    
+    key <- sprintf("Opossum_ITA_Vertex_%s_%d_%d", vertex_label, opossum_xmin, opossum_xmax)
+    shuffle_results_opossum[[key]] <- res_shuffle
+    
+    cat(key, " | obs r =", round(res_shuffle$obs_r, 3),
+        " | shuffle p =", signif(res_shuffle$p_emp, 3), "\n")
+  }
+}
+```
+
+```{r partial_correlation_setup}
+# Partial correlation: depth vs Vertex C controlling for Vertex B
+# Tests if relationship between depth and one vertex is independent of the other
+
+library(ppcor)
+
+mouse_subclass <- "L2/3"
+opossum_subclass <- "IT_A"
+regimes <- list(list(mouse = c(1000, 1550), opossum = c(1000, 1550)))
+
+mouse.rgb <- read.csv(paste0(dir.list$fig3$data, "mouse_integrated_PC_colors.csv"), 
+                      row.names = 1)
+opossum.rgb <- read.csv(paste0(dir.list$fig3$data, "opossum_integrated_PC_colors.csv"), 
+                        row.names = 1)
+```
+
+```{r partial_correlation_mouse}
+# Mouse partial correlations
+cat("=== Mouse Partial Correlations ===\n")
+
+mouse_cells <- colnames(obj.i.mouse.IT)[
+  !is.na(obj.i.mouse.IT$subclass_nn) & 
+  obj.i.mouse.IT$subclass_nn == mouse_subclass
+]
+mouse_coords <- obj.i.mouse.IT@images[[1]]$centroids@coords[
+  obj.i.mouse.IT$subclass_nn[!is.na(obj.i.mouse.IT$subclass_nn)] == mouse_subclass,
+]
+rownames(mouse_coords) <- mouse_cells
+
+mouse_y <- mouse_coords[mouse_cells, "x"]
+mouse_dB <- mouse.rgb[mouse_cells, "Euclidean_to_Vertex_B"]
+mouse_dC <- mouse.rgb[mouse_cells, "Euclidean_to_Vertex_C"]
+
+for (regime in regimes) {
+  mouse_xmin <- regime$mouse[1]
+  mouse_xmax <- regime$mouse[2]
+  
+  idx <- mouse_y >= mouse_xmin & mouse_y < mouse_xmax
+  
+  df_mouse <- data.frame(
+    Y = 1 - (mouse_y[idx] - mouse_xmin) / (mouse_xmax - mouse_xmin),
+    dB = mouse_dB[idx],
+    dC = mouse_dC[idx]
+  )
+  
+  # Ordinary Spearman correlations
+  cor_Y_dB <- cor(df_mouse$Y, df_mouse$dB, method = "spearman")
+  cor_Y_dC <- cor(df_mouse$Y, df_mouse$dC, method = "spearman")
+  cor_dB_dC <- cor(df_mouse$dB, df_mouse$dC, method = "spearman")
+  
+  cat(sprintf("\nMouse [%d-%d]:\n", mouse_xmin, mouse_xmax))
+  cat("Spearman correlations:\n")
+  cat("  Y vs dB =", round(cor_Y_dB, 3), "\n")
+  cat("  Y vs dC =", round(cor_Y_dC, 3), "\n")
+  cat("  dB vs dC =", round(cor_dB_dC, 3), "\n")
+  
+  # Partial correlations
+  pcor_C_given_B <- pcor.test(
+    x = df_mouse$Y,
+    y = df_mouse$dC,
+    z = df_mouse$dB,
+    method = "spearman"
+  )
+  
+  pcor_B_given_C <- pcor.test(
+    x = df_mouse$Y,
+    y = df_mouse$dB,
+    z = df_mouse$dC,
+    method = "spearman"
+  )
+  
+  cat("Partial correlations:\n")
+  cat("  Y ~ dC | dB: r =", round(pcor_C_given_B$estimate, 3),
+      " p =", signif(pcor_C_given_B$p.value, 3), "\n")
+  cat("  Y ~ dB | dC: r =", round(pcor_B_given_C$estimate, 3),
+      " p =", signif(pcor_B_given_C$p.value, 3), "\n")
+}
+```
+
+```{r partial_correlation_opossum}
+# Opossum partial correlations
+cat("\n=== Opossum Partial Correlations ===\n")
+
+opossum_cells <- colnames(obj.i.opossum.IT)[
+  !is.na(obj.i.opossum.IT$subclass_nn) & 
+  obj.i.opossum.IT$subclass_nn == opossum_subclass
+]
+opossum_coords <- obj.i.opossum.IT@images[[1]]$centroids@coords[
+  obj.i.opossum.IT$subclass_nn[!is.na(obj.i.opossum.IT$subclass_nn)] == opossum_subclass,
+]
+rownames(opossum_coords) <- opossum_cells
+
+opossum_y <- opossum_coords[opossum_cells, "x"]
+opossum_dB <- opossum.rgb[opossum_cells, "Euclidean_to_Vertex_B"]
+opossum_dC <- opossum.rgb[opossum_cells, "Euclidean_to_Vertex_C"]
+
+for (regime in regimes) {
+  opossum_xmin <- regime$opossum[1]
+  opossum_xmax <- regime$opossum[2]
+  
+  idx <- opossum_y >= opossum_xmin & opossum_y < opossum_xmax
+  
+  df_opossum <- data.frame(
+    Y = 1 - (opossum_y[idx] - opossum_xmin) / (opossum_xmax - opossum_xmin),
+    dB = opossum_dB[idx],
+    dC = opossum_dC[idx]
+  )
+  
+  # Ordinary Spearman correlations
+  cor_Y_dB <- cor(df_opossum$Y, df_opossum$dB, method = "spearman")
+  cor_Y_dC <- cor(df_opossum$Y, df_opossum$dC, method = "spearman")
+  cor_dB_dC <- cor(df_opossum$dB, df_opossum$dC, method = "spearman")
+  
+  cat(sprintf("\nOpossum [%d-%d]:\n", opossum_xmin, opossum_xmax))
+  cat("Spearman correlations:\n")
+  cat("  Y vs dB =", round(cor_Y_dB, 3), "\n")
+  cat("  Y vs dC =", round(cor_Y_dC, 3), "\n")
+  cat("  dB vs dC =", round(cor_dB_dC, 3), "\n")
+  
+  # Partial correlations
+  pcor_C_given_B <- pcor.test(
+    x = df_opossum$Y,
+    y = df_opossum$dC,
+    z = df_opossum$dB,
+    method = "spearman"
+  )
+  
+  pcor_B_given_C <- pcor.test(
+    x = df_opossum$Y,
+    y = df_opossum$dB,
+    z = df_opossum$dC,
+    method = "spearman"
+  )
+  
+  cat("Partial correlations:\n")
+  cat("  Y ~ dC | dB: r =", round(pcor_C_given_B$estimate, 3),
+      " p =", signif(pcor_C_given_B$p.value, 3), "\n")
+  cat("  Y ~ dB | dC: r =", round(pcor_B_given_C$estimate, 3),
+      " p =", signif(pcor_B_given_C$p.value, 3), "\n")
+}
+```
+
+```{r partial_correlation_permutation}
+partial_cor_permutation <- function(y, x, z, n_perm = 10000, method = "spearman") {
+  obs_pcor <- ppcor::pcor.test(y, x, z, method = method)$estimate
+  
+  r_perm <- replicate(n_perm, {
+    y_shuf <- sample(y)
+    ppcor::pcor.test(y_shuf, x, z, method = method)$estimate
+  })
+  
+  p_emp <- mean(abs(r_perm) >= abs(obs_pcor))
+  
+  list(obs_r = obs_pcor, r_perm = r_perm, p_emp = p_emp)
+}
+
+mouse_subclass <- "L2/3"
+opossum_subclass <- "IT_A"
+regimes <- list(list(mouse = c(1000, 1550), opossum = c(1000, 1550)))
+
+# Mouse
+cat("=== Mouse Partial Correlations (Permutation) ===\n")
+
+mouse_cells <- colnames(obj.i.mouse.IT)[
+  !is.na(obj.i.mouse.IT$subclass_nn) & 
+  obj.i.mouse.IT$subclass_nn == mouse_subclass
+]
+mouse_coords <- obj.i.mouse.IT@images[[1]]$centroids@coords[
+  obj.i.mouse.IT$subclass_nn[!is.na(obj.i.mouse.IT$subclass_nn)] == mouse_subclass,
+]
+rownames(mouse_coords) <- mouse_cells
+
+mouse_y <- mouse_coords[mouse_cells, "x"]
+mouse_dB <- mouse.rgb[mouse_cells, "Euclidean_to_Vertex_B"]
+mouse_dC <- mouse.rgb[mouse_cells, "Euclidean_to_Vertex_C"]
+
+for (regime in regimes) {
+  idx <- mouse_y >= regime$mouse[1] & mouse_y < regime$mouse[2]
+  
+  df_mouse <- data.frame(
+    Y = 1 - (mouse_y[idx] - regime$mouse[1]) / (regime$mouse[2] - regime$mouse[1]),
+    dB = mouse_dB[idx],
+    dC = mouse_dC[idx]
+  )
+  
+  set.seed(42)
+  pcor_C_given_B <- partial_cor_permutation(df_mouse$Y, df_mouse$dC, df_mouse$dB)
+  pcor_B_given_C <- partial_cor_permutation(df_mouse$Y, df_mouse$dB, df_mouse$dC)
+  
+  cat(sprintf("\nMouse [%d-%d] (n = %d cells):\n", regime$mouse[1], regime$mouse[2], nrow(df_mouse)))
+  cat("  Y ~ dC | dB: r =", round(pcor_C_given_B$obs_r, 3),
+      " p =", signif(pcor_C_given_B$p_emp, 3), "\n")
+  cat("  Y ~ dB | dC: r =", round(pcor_B_given_C$obs_r, 3),
+      " p =", signif(pcor_B_given_C$p_emp, 3), "\n")
+}
+
+# Opossum
+cat("\n=== Opossum Partial Correlations (Permutation) ===\n")
+
+opossum_cells <- colnames(obj.i.opossum.IT)[
+  !is.na(obj.i.opossum.IT$subclass_nn) & 
+  obj.i.opossum.IT$subclass_nn == opossum_subclass
+]
+opossum_coords <- obj.i.opossum.IT@images[[1]]$centroids@coords[
+  obj.i.opossum.IT$subclass_nn[!is.na(obj.i.opossum.IT$subclass_nn)] == opossum_subclass,
+]
+rownames(opossum_coords) <- opossum_cells
+
+opossum_y <- opossum_coords[opossum_cells, "x"]
+opossum_dB <- opossum.rgb[opossum_cells, "Euclidean_to_Vertex_B"]
+opossum_dC <- opossum.rgb[opossum_cells, "Euclidean_to_Vertex_C"]
+
+for (regime in regimes) {
+  idx <- opossum_y >= regime$opossum[1] & opossum_y < regime$opossum[2]
+  
+  df_opossum <- data.frame(
+    Y = 1 - (opossum_y[idx] - regime$opossum[1]) / (regime$opossum[2] - regime$opossum[1]),
+    dB = opossum_dB[idx],
+    dC = opossum_dC[idx]
+  )
+  
+  set.seed(42)
+  pcor_C_given_B <- partial_cor_permutation(df_opossum$Y, df_opossum$dC, df_opossum$dB)
+  pcor_B_given_C <- partial_cor_permutation(df_opossum$Y, df_opossum$dB, df_opossum$dC)
+  
+  cat(sprintf("\nOpossum [%d-%d] (n = %d cells):\n", regime$opossum[1], regime$opossum[2], nrow(df_opossum)))
+  cat("  Y ~ dC | dB: r =", round(pcor_C_given_B$obs_r, 3),
+      " p =", signif(pcor_C_given_B$p_emp, 3), "\n")
+  cat("  Y ~ dB | dC: r =", round(pcor_B_given_C$obs_r, 3),
+      " p =", signif(pcor_B_given_C$p_emp, 3), "\n")
+}
+```
+
+```{r}
+# Set the Python path back for Seurat (restart R)
+Sys.setenv(RETICULATE_PYTHON = "C:/Users/TLab/AppData/Local/Programs/Python/Python311/python.exe")
+```
