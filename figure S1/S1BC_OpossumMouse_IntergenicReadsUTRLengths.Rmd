@@ -1,0 +1,333 @@
+---
+title: "Figure S1B-C: Intergenic Read Distributions and UTR Length Comparison"
+output: 
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(data.table)
+library(stringr)
+library(comparatome)
+source("config.R")
+```
+
+```{r species_colors}
+# Species color palette
+species.colors <- c("Opossum" = "#c692b8", "Mouse" = "#aaaaaa")
+```
+
+```{r load_histogram_data}
+# Load intergenic read histogram data from pipeline output
+read_hist_files <- function(data_dir, pattern, species_label) {
+  files <- list.files(data_dir, pattern = pattern, full.names = TRUE)
+  if (length(files) == 0) {
+    stop("No histogram files found matching pattern: ", pattern, " in ", data_dir)
+  }
+  dt <- rbindlist(lapply(files, fread), use.names = TRUE, fill = TRUE)
+  dt[, species := species_label]
+  return(dt)
+}
+
+# Load mouse and opossum histogram data
+# Pattern matches: *.intergenic.updown.by_geneclass.hist.tsv
+hist.mouse <- read_hist_files(
+  dir.list$figS1$data, 
+  "P38.*\\.intergenic\\.updown\\.by_geneclass\\.hist\\.tsv$", 
+
+  "Mouse"
+)
+hist.opossum <- read_hist_files(
+  dir.list$figS1$data, 
+  "OpossumV1.*\\.intergenic\\.updown\\.by_geneclass\\.hist\\.tsv$", 
+  "Opossum"
+)
+
+# Combine datasets
+hist.data <- rbind(hist.mouse, hist.opossum)
+```
+
+```{r preprocess_histogram_data}
+# Ensure numeric columns
+hist.data[, bin_start_bp := as.numeric(bin_start_bp)]
+hist.data[, bin_end_bp := as.numeric(bin_end_bp)]
+hist.data[, bin_mid_bp := as.numeric(bin_mid_bp)]
+hist.data[, count := as.numeric(count)]
+hist.data[, total_good_reads := as.numeric(total_good_reads)]
+
+# Convert to kb and filter for proper 5p/3p orientation
+hist.data <- hist.data %>%
+  mutate(bin_mid_kb = bin_mid_bp / 1000) %>%
+  filter(
+    (region == "5p" & bin_mid_bp <= 0) |
+    (region == "3p" & bin_mid_bp >= 0)
+  )
+
+# Compute bin width from data
+bin_width_kb <- unique((hist.data$bin_end_bp - hist.data$bin_start_bp) / 1000)[1]
+divider_gap_half_kb <- bin_width_kb / 2
+
+# Aggregate counts across samples within species x gene_group x region x bin
+hist.agg <- hist.data %>%
+  group_by(species, gene_group, region, bin_mid_kb, bin_mid_bp, bin_start_bp, bin_end_bp) %>%
+  summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+
+# Compute species-level totals (avoid double-counting per-bin rows)
+species.totals <- hist.data %>%
+  distinct(species, sample, total_good_reads) %>%
+  group_by(species) %>%
+  summarise(total_good_reads_species = sum(total_good_reads, na.rm = TRUE), .groups = "drop")
+
+hist.agg <- hist.agg %>%
+  left_join(species.totals, by = "species")
+```
+
+```{r simplify_gene_groups}
+# Simplify gene groups for plotting:
+# - lncRNA (collapse 3UTR/no3UTR since lncRNAs lack UTRs)
+# - protein_coding with 3'UTR
+# - protein_coding without 3'UTR
+hist.plot <- hist.agg %>%
+  mutate(
+    gene_class = case_when(
+      grepl("lncRNA", gene_group) ~ "lncRNA",
+      gene_group == "protein_coding_3UTR" ~ "Protein-coding\n(with 3'UTR)",
+      gene_group == "protein_coding_no3UTR" ~ "Protein-coding\n(no 3'UTR)",
+      TRUE ~ gene_group
+    )
+  ) %>%
+  # Re-aggregate after collapsing lncRNA groups
+  group_by(species, gene_class, region, bin_mid_kb, bin_mid_bp, bin_start_bp, bin_end_bp, total_good_reads_species) %>%
+  summarise(count = sum(count, na.rm = TRUE), .groups = "drop")
+
+# Normalize as percentage of total good reads per species
+hist.plot <- hist.plot %>%
+  mutate(
+    pct_good_reads = ifelse(total_good_reads_species > 0, 
+                            (count / total_good_reads_species) * 100, 
+                            0)
+  )
+
+# Set factor levels for consistent ordering
+hist.plot$species <- factor(hist.plot$species, levels = c("Mouse", "Opossum"))
+hist.plot$gene_class <- factor(hist.plot$gene_class, levels = c(
+  "Protein-coding\n(with 3'UTR)", 
+  "Protein-coding\n(no 3'UTR)", 
+  "lncRNA"
+))
+```
+
+```{r figure_s1a, fig.width=8, fig.height=6}
+# Figure S1A: Intergenic read distributions by gene class
+# Mouse on left, Opossum on right; rows = gene class
+# Grey bar at zero schematically represents gene body between 5' and 3' ends
+p <- ggplot(hist.plot, aes(x = bin_mid_kb, y = pct_good_reads, fill = species)) +
+  geom_col(width = bin_width_kb, position = "identity", alpha = 0.8, colour = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black") +
+  facet_grid(gene_class ~ species) +
+  scale_fill_manual(values = species.colors, guide = "none") +
+  scale_y_continuous(limits = c(0, 0.7)) +
+  labs(
+    x = "Distance to nearest gene end (kb)\n← 5' end | 3' end →",
+    y = "% Total High-Quality Reads"
+  ) +
+  theme_classic() +
+  theme(
+    strip.text = element_text(size = 10),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 11),
+    panel.spacing = unit(0.5, "lines")
+  )
+print(p)
+SavePNGandSVG(p, dir.list$figS1$plots, "S1B_OpossumMouse-IntergenicReadDistribution")
+```
+
+```{r gtf_reader_functions}
+# GTF parsing utilities for UTR length extraction
+read_gtf <- function(gtf_path) {
+  lines <- readLines(gtf_path, warn = FALSE)
+  lines <- lines[!grepl("^#", lines)]
+  lines <- lines[nzchar(lines)]
+  dt <- fread(
+    text = lines,
+    sep = "\t",
+    header = FALSE,
+    quote = "",
+    fill = TRUE,
+    data.table = TRUE,
+    showProgress = FALSE
+  )
+  if (ncol(dt) < 9) stop("GTF parse failed: expected >=9 columns")
+  dt <- dt[, 1:9, with = FALSE]
+  setnames(dt, paste0("V", 1:9))
+  return(dt)
+}
+
+attr_get <- function(x, key) {
+  m <- str_match(x, paste0(key, " \"([^\"]+)\""))
+  return(m[, 2])
+}
+
+norm_biotype <- function(bt) {
+  bt <- ifelse(is.na(bt), NA_character_, bt)
+  bt <- ifelse(bt == "lincRNA", "lncRNA", bt)
+  bt <- ifelse(bt %in% c("protein_coding", "lncRNA"), bt, NA_character_)
+  return(bt)
+}
+```
+
+```{r extract_utr_lengths}
+# Extract maximum 3'UTR length per gene from GTF
+get_3utr_lengths <- function(gtf_file, species_label) {
+  gtf <- read_gtf(gtf_file)
+  gtf[, gene_id := attr_get(V9, "gene_id")]
+  gtf[, gene_name := attr_get(V9, "gene_name")]
+  gtf[, gene_biotype := attr_get(V9, "gene_biotype")]
+  gtf[is.na(gene_biotype), gene_biotype := attr_get(V9, "gene_type")]
+  gtf[, gene_biotype := norm_biotype(gene_biotype)]
+  
+  # Extract 3'UTR features
+
+  utr <- gtf[
+    V3 == "three_prime_utr" & !is.na(gene_id) & !is.na(gene_biotype),
+    .(gene_id, gene_name, gene_biotype, utr_len = as.integer(V5) - as.integer(V4) + 1L)
+  ]
+  
+  # Compute max 3'UTR length per gene
+  utr.gene <- utr[
+    ,
+    .(max_utr_len = max(utr_len, na.rm = TRUE),
+      gene_name = gene_name[which.max(utr_len)][1]),
+    by = .(gene_id, gene_biotype)
+  ]
+  utr.gene[, species := species_label]
+  return(utr.gene)
+}
+
+# Load GTFs and extract UTR lengths
+mouse.gtf <- paste0(dir.list$central, "genome/Mus_musculus.GRCm38.92.filtered.gtf")
+opossum.gtf <- paste0(dir.list$central, "genome/Monodelphis_domestica.ASM229v1.110.filtered.gtf")
+
+utr.mouse <- get_3utr_lengths(mouse.gtf, "Mouse")
+utr.opossum <- get_3utr_lengths(opossum.gtf, "Opossum")
+utr.data <- rbind(utr.mouse, utr.opossum, fill = TRUE)
+```
+
+```{r utr_summary_table}
+# Summary statistics for UTR lengths
+utr.summary <- utr.data[
+  gene_biotype == "protein_coding",
+  .(
+    n_genes = .N,
+    median_bp = median(max_utr_len),
+    mean_bp = round(mean(max_utr_len), 1),
+    p75_bp = as.numeric(quantile(max_utr_len, 0.75)),
+    p90_bp = as.numeric(quantile(max_utr_len, 0.90)),
+    p95_bp = as.numeric(quantile(max_utr_len, 0.95))
+  ),
+  by = species
+][order(species)]
+
+print(utr.summary)
+```
+
+```{r utr_fraction_summary}
+# Compute fraction of protein-coding genes with annotated 3'UTRs per species
+get_gene_counts <- function(gtf_file, species_label) {
+  gtf <- read_gtf(gtf_file)
+  gtf[, gene_id := attr_get(V9, "gene_id")]
+  gtf[, gene_biotype := attr_get(V9, "gene_biotype")]
+  gtf[is.na(gene_biotype), gene_biotype := attr_get(V9, "gene_type")]
+  gtf[, gene_biotype := norm_biotype(gene_biotype)]
+  genes <- unique(gtf[V3 == "gene" & !is.na(gene_id) & !is.na(gene_biotype), .(gene_id, gene_biotype)])
+  genes[, species := species_label]
+  return(genes)
+}
+
+genes.mouse <- get_gene_counts(mouse.gtf, "Mouse")
+genes.opossum <- get_gene_counts(opossum.gtf, "Opossum")
+genes.all <- rbind(genes.mouse, genes.opossum)
+
+# Mark genes with annotated 3'UTRs
+has.utr <- unique(utr.data[, .(species, gene_biotype, gene_id)])
+genes.all[, has_3utr := gene_id %in% has.utr[species == .BY$species & gene_biotype == .BY$gene_biotype]$gene_id,
+          by = .(species, gene_biotype)]
+
+# Summary of 3'UTR annotation coverage
+utr.coverage <- genes.all[
+  gene_biotype == "protein_coding",
+  .(
+    n_genes_total = .N,
+    n_has_3utr = sum(has_3utr),
+    pct_has_3utr = round(sum(has_3utr) / .N * 100, 1)
+  ),
+  by = species
+][order(species)]
+```
+
+```{r, figure_s1c_inset}
+# Figure S1C (inset): Percentage of protein-coding genes with 3'UTR
+utr.coverage$species <- factor(utr.coverage$species, levels = c("Opossum", "Mouse"))
+
+p <- ggplot(utr.coverage, aes(x = species, y = pct_has_3utr, fill = species)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_text(aes(label = paste0(pct_has_3utr, "%")), vjust = -0.5, size = 3.5) +
+  scale_fill_manual(values = species.colors, guide = "none") +
+  scale_y_continuous(limits = c(0, 100), expand = expansion(mult = c(0, 0.1))) +
+  labs(
+    x = NULL,
+    y = "% Protein-coding genes\nwith annotated 3'UTR"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11)
+  ) + coord_fixed(ratio=0.06)
+print(p)
+SavePNGandSVG(p, dir.list$figS1$plots, "S1C_OpossumMouse-PercentGenes3PrimeUTR-BarPlot")
+```
+
+```{r figure_s1c, fig.width=5, fig.height=4}
+# Figure S1C: Log-transformed 3'UTR length distributions
+# Protein-coding genes only, overlaid histograms
+utr.pc <- utr.data[gene_biotype == "protein_coding"]
+utr.pc$species <- factor(utr.pc$species, levels = c("Mouse", "Opossum"))
+
+p <- ggplot(utr.pc, aes(x = max_utr_len, fill = species, color = species)) +
+  geom_histogram(
+    binwidth = 0.1, 
+    position = "identity", 
+    alpha = 0.6,
+    linewidth = 0.5,
+    color = "black"
+  ) +
+  scale_x_log10(
+    breaks = c(1, 10, 100, 1000, 10000),
+    labels = c("1", "10", "100", "1,000", "10,000"),
+    limits = c(1, 50000)
+  ) +
+  scale_fill_manual(values = species.colors, name = "Species") +
+  scale_color_manual(values = species.colors, name = "Species") +
+  labs(
+    x = "3'UTR length per gene (bp, log scale)",
+    y = "Number of genes"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = c(0.15, 0.85),
+    legend.background = element_rect(fill = "white", color = "white"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 11)
+  )
+
+print(p)
+SavePNGandSVG(p, dir.list$figS1$plots, "S1C_OpossumMouse-3PrimeUTRLengthDistribution")
+```
