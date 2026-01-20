@@ -1,0 +1,134 @@
+---
+title: "Visualize Spatial Columns: Subclass Distribution and Density Profiles (Mouse)"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(comparatome)
+library(here)
+source("config.R")
+```
+
+```{r load_labeled_spatial}
+# Load the combined labeled spatial object from step 5
+obj.ctx <- readRDS(paste0(dir.list$spatial$seurat$processed, "mouse_stereoseq_labeled.rds"))
+
+cat(sprintf("Loaded labeled spatial object: %d cells, %d genes\n", 
+            ncol(obj.ctx), nrow(obj.ctx)))
+cat("\nMetadata columns:\n")
+print(colnames(obj.ctx@meta.data))
+
+cat("\nSample distribution:\n")
+print(table(obj.ctx$sample))
+
+cat("\nSubclass distribution:\n")
+print(table(obj.ctx$subclass_nn, useNA = "ifany"))
+```
+
+```{r define_colors}
+# Define color schemes for each class
+# Adjust these colors to match your preferences
+
+# Glutamatergic colors (8 subclasses)
+colors.glutamatergic <- hcl.colors(8, palette = "Dynamic")
+colors.glutamatergic[2] <- "#6d6e71"
+names(colors.glutamatergic) <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6IT", "L6CT", "L6b")
+
+okabe_ito <- c(
+  "#E69F00", "#56B4E9", "#009E73", "#E6C84F",
+  "#0072B2", "#D55E00", "#CC79A7", "#000000"
+)
+
+# GABAergic (6)
+colors.gabaergic <- okabe_ito[c(5, 3, 4, 7, 6, 1)]
+names(colors.gabaergic) <- c("Pvalb", "Sst", "Vip", "Lamp5", "Frem1", "Stac")
+
+# Non-neuronal colors (6 subclasses) — distinct, not green-dominant
+colors.nonneuronal <- hcl.colors(6, palette = "Dark 3")
+colors.nonneuronal[4] <- "#E6C84F"
+names(colors.nonneuronal) <- c("Astro", "Micro", "Endo", "OD", "OPC", "VLMC")
+
+cat("Color schemes defined\n")
+```
+
+```{r plot_all_subclasses}
+# Plot all subclasses on spatial coordinates
+Idents(obj.ctx) <- "subclass_nn"
+
+# Remove None and NA for cleaner visualization
+obj.ctx.clean <- subset(obj.ctx, subclass_nn != "None")
+obj.ctx.clean <- obj.ctx.clean[, !is.na(obj.ctx.clean$subclass_nn)]
+
+ImageDimPlot(obj.ctx.clean, 
+             fov = "COL", 
+             size = 2.5,
+             axes = TRUE) +
+  ggtitle("All Subclasses - Combined Columns")
+```
+
+```{r glutamatergic_visualization}
+# Subset to glutamatergic subclasses
+glut.subclasses <- c("L2/3", "L4", "L5IT", "L5NP", "L5PT", "L6IT", "L6CT", "L6b")
+obj.ctx.glutamatergic <- subset(obj.ctx, subclass_nn %in% glut.subclasses)
+
+cat(sprintf("Glutamatergic cells: %d\n", ncol(obj.ctx.glutamatergic)))
+
+# Set identity and levels
+Idents(obj.ctx.glutamatergic) <- "subclass_nn"
+levels(obj.ctx.glutamatergic) <- glut.subclasses
+
+# Spatial plot
+p <- ImageDimPlot(obj.ctx.glutamatergic, 
+                  fov = "COL", 
+                  size = 3, 
+                  cols = colors.glutamatergic,
+                  axes = TRUE) +
+  ggtitle("Glutamatergic Subclasses")
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3C_Mouse-ColumnSubclassGlutamatergic-SpatialDimPlot")
+```
+
+```{r glutamatergic_density}
+# Density profile along cortical depth (Y-axis)
+coords <- GetTissueCoordinates(obj.ctx.glutamatergic)
+df <- data.frame(
+  y = coords$x,  # X coordinate represents cortical depth in vertical columns
+  subclass = obj.ctx.glutamatergic$subclass_nn
+)
+
+# Filter and set subclass order
+df <- df %>%
+  filter(!is.na(subclass) & subclass != "None") %>%
+  mutate(subclass = factor(subclass, levels = glut.subclasses))
+
+# Plot smooth density profiles
+p <- ggplot(df, aes(x = y, color = subclass)) +
+  geom_density(size = 2) +
+  scale_color_manual(values = colors.glutamatergic) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    aspect.ratio = 1
+  ) +
+  coord_flip() +
+  labs(
+    title = "Glutamatergic Density Profile",
+    x = "Cortical Depth",
+    y = "Density"
+  )
+print(p)
+SavePNGandSVG(p, dir.list$fig3$plots, "3D_Mouse-ColumnSubclassGlutamatergic-Density")
+```

@@ -1,0 +1,201 @@
+---
+title: "Spatial Gene Expression: Layer Markers (Opossum and Mouse)"
+output:
+---
+
+```{r setup, include=FALSE}
+# This sets the project root based on the repo structure.
+# If you move this file, you may to set the root manually to find config.R
+knitr::opts_knit$set(root.dir = dirname(dirname(rstudioapi::getSourceEditorContext()$path)))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(Seurat)
+library(SeuratObject)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(comparatome)
+source("config.R")
+```
+
+```{r load_spatial_data}
+# Load labeled spatial objects
+obj.opossum <- readRDS(paste0(dir.list$spatial$seurat$processed, "opossum_stereoseq_labeled.rds"))
+obj.mouse <- readRDS(paste0(dir.list$spatial$seurat$processed, "mouse_stereoseq_labeled.rds"))
+
+cat(sprintf("Opossum: %d cells, %d genes\n", ncol(obj.opossum), nrow(obj.opossum)))
+cat(sprintf("Mouse: %d cells, %d genes\n", ncol(obj.mouse), nrow(obj.mouse)))
+```
+
+```{r subset_glutamatergic}
+# Subset to glutamatergic cells for layer marker visualization
+glut.subclasses <- c("L2/3", "L4", "L5IT", "IT_A", "IT_B", "IT_C", "L5NP", "L5PT", "L6IT", "IT_D", "L6CT", "L6b")
+
+obj.opossum.glut <- subset(obj.opossum, subclass_nn %in% glut.subclasses)
+obj.mouse.glut <- subset(obj.mouse, subclass_nn %in% glut.subclasses)
+
+cat(sprintf("Opossum glutamatergic: %d cells\n", ncol(obj.opossum.glut)))
+cat(sprintf("Mouse glutamatergic: %d cells\n", ncol(obj.mouse.glut)))
+```
+
+```{r define_plot_function}
+#' Spatial Feature Plot with Percentile Normalization
+#'
+#' Plots gene expression on spatial coordinates with percentile-based scaling.
+#' Percentile ranks are calculated only among expressing cells to handle
+#' zero-inflation common in single-cell data.
+#'
+#' @param obj Seurat object with spatial coordinates
+#' @param feature Gene name to plot
+#' @param pct.floor Percentile floor for color scale (default 0)
+#' @param pct.ceiling Percentile ceiling for color scale (default 99)
+#' @param size Point size (default 2)
+#' @param fov FOV name for GetTissueCoordinates (default "COL")
+#' @param low.color Color for low expression (default "#fcf0c2")
+#' @param high.color Color for high expression (default "#a1020a")
+#' @return ggplot object
+ImageFeaturePlotPercentile <- function(obj, 
+                                        feature, 
+                                        pct.floor = 0, 
+                                        pct.ceiling = 99,
+                                        size = 2, 
+                                        fov = "COL",
+                                        low.color = "#fcf0c2", 
+                                        high.color = "#a1020a") {
+  
+  # Extract spatial coordinates
+  coords <- GetTissueCoordinates(obj, image = fov)
+  
+  # Extract expression values
+  expr <- FetchData(obj, vars = feature)
+  
+  # Build dataframe
+  df <- data.frame(
+    x = coords$x,
+    y = coords$y,
+    expression = expr[[1]]
+  )
+  
+  # Calculate percentiles only among expressing cells to handle zero-inflation
+  # Zeros are mapped to floor; non-zeros scaled across remaining range
+  expressing <- df$expression > 0
+  n_expressing <- sum(expressing)
+  
+  if (n_expressing > 0) {
+    # Calculate percentile ranks only among expressing cells
+    expr_nonzero <- df$expression[expressing]
+    pct_nonzero <- ecdf(expr_nonzero)(expr_nonzero) * 100
+    
+    # Initialize: zeros get floor, expressing cells get their percentile
+    df$pct <- pct.floor
+    df$pct[expressing] <- pct_nonzero
+  } else {
+    # No expressing cells - all at floor
+    df$pct <- pct.floor
+  }
+  
+  # Apply ceiling
+  df$pct_scaled <- pmin(df$pct, pct.ceiling)
+  
+  # Order by expression so high values plot on top
+  df <- df[order(df$pct_scaled), ]
+  
+  # Calculate square limits (expand shorter axis to match longer)
+  x.range <- range(df$x)
+  y.range <- range(df$y)
+  max.span <- max(diff(x.range), diff(y.range))
+  
+  x.mid <- mean(x.range)
+  y.mid <- mean(y.range)
+  
+  x.lim <- c(x.mid - max.span/2, x.mid + max.span/2)
+  y.lim <- c(y.mid - max.span/2, y.mid + max.span/2)
+  
+  # Plot
+ p <- ggplot(df, aes(x = y, y = x, color = pct_scaled)) +
+    geom_point(size = size, alpha = 1) +
+    scale_color_gradient(
+      low = low.color, 
+      high = high.color,
+      limits = c(pct.floor, pct.ceiling),
+      name = "Percentile"
+    ) +
+    coord_fixed(ratio = 1.1, xlim = y.lim, ylim = x.lim) +
+    theme_minimal() +
+    theme(
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      axis.title = element_blank(),
+      panel.grid = element_blank()
+    ) +
+    ggtitle(feature)
+  
+  return(p)
+}
+```
+
+```{r define_layer_markers}
+# Layer markers spanning cortical depth
+layer.markers <- c("Cux1", "Cux2", "Rorb", "Gria4", "Fezf2", "Foxp2", "Tle4", "Deptor")
+
+# Check gene availability
+cat("Gene availability:\n")
+cat("Opossum:\n")
+for (gene in layer.markers) {
+  present <- gene %in% rownames(obj.opossum.glut)
+  cat(sprintf("  %s: %s\n", gene, ifelse(present, "present", "MISSING")))
+}
+cat("\nMouse:\n")
+for (gene in layer.markers) {
+  present <- gene %in% rownames(obj.mouse.glut)
+  cat(sprintf("  %s: %s\n", gene, ifelse(present, "present", "MISSING")))
+}
+```
+
+```{r plot_opossum_markers, fig.width=12, fig.height=12}
+# Plot all layer markers for opossum
+plots.opossum <- list()
+for (gene in layer.markers) {
+  if (gene %in% rownames(obj.opossum.glut)) {
+    plots.opossum[[gene]] <- ImageFeaturePlotPercentile(
+      obj.opossum.glut, 
+      gene, 
+      pct.ceiling = 99,
+      size = 1
+    )
+  }
+}
+
+# Combine plots
+if (length(plots.opossum) > 0) {
+  p.opossum <- wrap_plots(plots.opossum, ncol = 4) + 
+    plot_annotation(title = "Opossum Layer Markers (Percentile Scaled)")
+  print(p.opossum)
+  SavePNGandSVG(p.opossum, dir.list$fig3$plots, "3B_Opossum-ColumnMarkers-SpatialFeaturePlot")
+}
+```
+
+```{r plot_mouse_markers, fig.width=12, fig.height=12}
+# Plot all layer markers for mouse
+plots.mouse <- list()
+for (gene in layer.markers) {
+  if (gene %in% rownames(obj.mouse.glut)) {
+    plots.mouse[[gene]] <- ImageFeaturePlotPercentile(
+      obj.mouse.glut, 
+      gene, 
+      pct.ceiling = 99,
+      size = 1
+    )
+  }
+}
+
+# Combine plots
+if (length(plots.mouse) > 0) {
+  p.mouse <- wrap_plots(plots.mouse, ncol = 4) + 
+    plot_annotation(title = "Mouse Layer Markers (Percentile Scaled)")
+  print(p.mouse)
+  SavePNGandSVG(p.mouse, dir.list$fig3$plots, "3B_Mouse-ColumnMarkers-SpatialFeaturePlot")
+}
+```
