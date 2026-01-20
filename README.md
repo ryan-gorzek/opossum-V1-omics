@@ -1,5 +1,5 @@
 
-# Comparative transcriptomics of opossum and mouse V1
+# Comparative single-nucleus and spatial transcriptomic profiling of opossum and mouse V1
 
 Code for
 **Gorzek & Trachtenberg (2025)**,
